@@ -1,0 +1,69 @@
+[project]
+name = "study-agent"
+version = "0.1.0"
+description = "A personal AI agent that reads my course deadlines and timetable, plans my day, and warns me what is at risk."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+dependencies = [
+    "anthropic>=2.13.0",
+    "icalendar>=7.3.2",
+    "python-dotenv>=1.2.4",
+    "pyyaml>=6.0.4",
+    "recurring-ical-events>=3.8.2",
+    "rich>=15.0.0",
+    "tzdata>=2026.6",
+]
+
+[project.scripts]
+study = "study_agent.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/study_agent"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "PTH", "DTZ"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["DTZ"]
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+mypy_path = "src"
+packages = ["study_agent"]
+
+[[tool.mypy.overrides]]
+module = ["icalendar.*", "recurring_ical_events.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.coverage.run]
+source = ["study_agent"]
+branch = true
+
+[tool.coverage.report]
+show_missing = false
+skip_covered = true
+
+[dependency-groups]
+dev = [
+    "mypy>=2.4.1",
+    "pre-commit>=4.7.0",
+    "pytest>=9.2.0",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.17.6",
+    "types-pyyaml>=6.0.12.20261122",
+]
