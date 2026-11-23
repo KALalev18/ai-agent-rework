@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned dependencies
+        run: uv sync --locked
+
+      - name: No secrets in the repository
+        run: git ls-files -z | xargs -0 python scripts/check_secrets.py
+
+      - name: Lint
+        run: |
+          uv run ruff check src tests scripts
+          uv run ruff format --check src tests scripts
+
+      - name: Type check
+        run: uv run mypy
+
+      - name: Tests (unit, agent loop in replay mode, eval set)
+        run: uv run pytest --cov --cov-report=term
+
+      - name: Eval set (replay mode, no API key)
+        run: uv run study eval
+
+      - name: Demo runs without an API key
+        run: uv run study demo
