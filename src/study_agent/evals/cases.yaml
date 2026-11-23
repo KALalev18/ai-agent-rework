@@ -1,0 +1,293 @@
+# Evaluation set: 22 questions against the fictional demo semester (clock: Mon 23 Nov 2026 08:00).
+#
+# expected_tools: each entry must be called; "a|b" means either is fine.
+# forbidden_tools: must not be called (e.g. writes for a read-only question).
+# expected_facts / forbidden_facts: case-insensitive substrings of the final answer.
+# approve: my scripted y/n answers to approval prompts, in order. An unexpected prompt fails.
+# db: SQL assertions on the database after the run.
+# script: the model turns used in replay mode when no recorded cassette exists. Replay tests the
+#         harness; `study eval --live` measures the real model on the same questions.
+
+- id: morning-brief
+  question: Give me my morning brief for today.
+  expected_tools: [plan_day, get_deadlines]
+  forbidden_tools: &writes [add_task, complete_item, log_progress, set_estimate, schedule_blocks, move_study_block]
+  expected_facts: [Assignment 3, Project milestone 2, Exercise round 7, "10:15"]
+  forbidden_facts: [Assignment 2]
+  script:
+    - tools:
+        - {name: plan_day, input: {}}
+        - {name: get_deadlines, input: {to_date: "2026-11-30"}}
+    - text: |
+        **Today** (Mon 23 Nov)
+        - 10:15-12:00 CS-E9001 Agent Systems lecture
+        - 14:15-16:00 TU-E9004 Startup Finance lecture
+
+        **Plan**
+        - 09:00-10:15, 12:00-13:30 and 13:45-14:15: CS-E9001 Assignment 3: Tool-calling agent (3 h left, due Wed 25 Nov 23:59)
+        - 16:00-17:30: MS-C9002 Exercise round 8 (due Thu 26 Nov 12:00)
+
+        **At risk**
+        - Overdue: MS-C9002 Exercise round 7, was due Thu 19 Nov 12:00 (mycourses-demo.ics) and is not marked done.
+        - At risk: CS-E9001 Project milestone 2, due Mon 30 Nov 16:00 (mycourses-demo.ics). Up to that deadline you need 41.0 h of work and have 38.5 h of free study time.
+        - Tight: CS-E9001 Peer review 2 (due Tue 1 Dec 23:59) and MS-C9002 Exercise round 9 (due Thu 3 Dec 12:00).
+
+        **Coming up**
+        - CS-E9001 Assignment 3, due Wed 25 Nov 23:59 (mycourses-demo.ics)
+        - MS-C9002 Exercise round 8, due Thu 26 Nov 12:00 (mycourses-demo.ics)
+        - ELEC-C9003 Lab report 4, due Fri 27 Nov 23:59 (mycourses-demo.ics)
+        - TU-E9004 Quiz 5, due Sun 29 Nov 23:59 (mycourses-demo.ics)
+
+        Suggestion: the milestone is the real problem. Start it right after Assignment 3, or lower its 25 h estimate if that is too pessimistic.
+
+- id: due-this-week
+  question: What's due this week?
+  expected_tools: ["get_deadlines|plan_week"]
+  forbidden_tools: *writes
+  expected_facts: [Assignment 3, Exercise round 8, Lab report 4, Quiz 5]
+  forbidden_facts: [Assignment 2, opens]
+  script:
+    - tools: [{name: get_deadlines, input: {to_date: "2026-11-29"}}]
+    - text: |
+        Due this week (to Sun 29 Nov), all from mycourses-demo.ics:
+        - CS-E9001 Assignment 3: Tool-calling agent, due Wed 25 Nov 23:59 (ok)
+        - MS-C9002 Exercise round 8, due Thu 26 Nov 12:00 (ok)
+        - ELEC-C9003 Lab report 4, due Fri 27 Nov 23:59 (ok)
+        - TU-E9004 Quiz 5, due Sun 29 Nov 23:59 (ok)
+
+- id: due-tomorrow
+  question: Is anything due tomorrow?
+  expected_tools: [get_deadlines]
+  forbidden_tools: *writes
+  expected_facts: ["24 Nov"]
+  script:
+    - tools: [{name: get_deadlines, input: {from_date: "2026-11-24", to_date: "2026-11-24"}}]
+    - text: Nothing is due tomorrow, Tue 24 Nov.
+
+- id: next-course-deadline
+  question: When is the next CS-E9001 deadline?
+  expected_tools: [get_deadlines]
+  forbidden_tools: *writes
+  expected_facts: [Assignment 3, "25 Nov", "23:59"]
+  script:
+    - tools: [{name: get_deadlines, input: {course: CS-E9001}}]
+    - text: "CS-E9001 Assignment 3: Tool-calling agent, due Wed 25 Nov 23:59 (mycourses-demo.ics). You logged 1 h on it already, so about 3 h are left."
+
+- id: at-risk
+  question: What am I at risk of missing?
+  expected_tools: ["get_deadlines|plan_day|plan_week"]
+  forbidden_tools: *writes
+  expected_facts: [Project milestone 2, Exercise round 7]
+  script:
+    - tools: [{name: plan_day, input: {}}]
+    - text: |
+        - **Overdue**: MS-C9002 Exercise round 7, was due Thu 19 Nov 12:00 (mycourses-demo.ics).
+        - **At risk**: CS-E9001 Project milestone 2, due Mon 30 Nov 16:00. It needs 41.0 h of work up to that deadline; you have 38.5 h of free study time.
+        - **Tight**: CS-E9001 Peer review 2 (due Tue 1 Dec 23:59) and MS-C9002 Exercise round 9 (due Thu 3 Dec 12:00).
+
+- id: why-at-risk
+  question: Why is my project milestone at risk?
+  expected_tools: ["get_deadlines|plan_day|plan_week"]
+  forbidden_tools: *writes
+  expected_facts: ["41.0", "38.5"]
+  script:
+    - tools: [{name: get_deadlines, input: {course: CS-E9001}}]
+    - text: |
+        CS-E9001 Project milestone 2 is due Mon 30 Nov 16:00 (mycourses-demo.ics). Your estimate is 25 h and nothing is logged yet. Together with the deadlines before it, you need 41.0 h of work by then, but there are only 38.5 h of free study time before Mon 30 Nov 16:00 inside your study window and daily cap.
+
+        Logging work you already did, lowering the estimate, or allowing longer study days would change the result.
+
+- id: thursday-timetable
+  question: What lectures or sessions do I have on Thursday?
+  expected_tools: ["get_timetable|plan_day|plan_week"]
+  forbidden_tools: *writes
+  expected_facts: ["14:15"]
+  script:
+    - tools: [{name: get_timetable, input: {from_date: "2026-11-26"}}]
+    - text: "Thu 26 Nov: MS-C9002 Applied Probability exercise session, 14:15-16:00."
+
+- id: week-plan
+  question: Plan my week.
+  expected_tools: [plan_week]
+  forbidden_tools: *writes
+  expected_facts: [Project milestone 2, Lab report 4]
+  script:
+    - tools: [{name: plan_week, input: {}}]
+    - text: |
+        - **Mon 23 Nov**: CS-E9001 Assignment 3 (09:00-10:15, 12:00-13:30, 13:45-14:15), MS-C9002 Exercise round 8 16:00-17:30.
+        - **Tue 24 Nov**: Exercise round 8 09:00-11:45, ELEC-C9003 Lab report 4 17:00-19:45.
+        - **Wed 25 Nov**: Lab report 4 09:00-15:00 around the lecture, TU-E9004 Quiz 5 15:15-16:15.
+        - **Thu 26 Nov**: CS-E9001 Project milestone 2 09:00-13:00; your saved Lab report 4 block 18:00-19:30.
+        - **Fri 27 Nov**: Project milestone 2 09:00-16:15 around the lecture.
+        - **Sat 28 Nov**: Project milestone 2 09:00-14:15, including your saved block 10:00-12:00.
+        - **Sun 29 Nov**: Project milestone 2 09:00-14:45.
+
+        **At risk**: Project milestone 2 (due Mon 30 Nov 16:00) does not fit even with this plan; MS-C9002 Exercise round 7 is overdue (was due Thu 19 Nov 12:00).
+
+- id: done-log
+  question: "I finished or worked on this: finished exercise round 8, took about 3 hours. Log it."
+  expected_tools: [log_progress]
+  approve: [true]
+  expected_facts: [Exercise round 8]
+  db:
+    - {sql: "SELECT COUNT(*) FROM deadline_state WHERE deadline_id = 'D-503d90' AND done_at IS NOT NULL", equals: 1}
+    - {sql: "SELECT minutes FROM progress WHERE item_id = 'D-503d90'", equals: 180}
+  script:
+    - tools: [{name: get_deadlines, input: {course: MS-C9002}}]
+    - tools:
+        - name: log_progress
+          input: {text: Finished exercise round 8, item_id: D-503d90, minutes: 180, mark_done: true}
+    - text: Logged 3 h and marked MS-C9002 Exercise round 8 as done. It no longer counts toward your workload.
+
+- id: done-declined
+  question: "I finished or worked on this: 2 hours on the lab report. Log it."
+  expected_tools: [log_progress]
+  approve: [false]
+  db:
+    - {sql: "SELECT COUNT(*) FROM progress", equals: 1}
+  script:
+    - tools: [{name: get_deadlines, input: {course: ELEC-C9003}}]
+    - tools:
+        - name: log_progress
+          input: {text: Worked on the lab report, item_id: D-f0e727, minutes: 120}
+    - text: OK, nothing was logged.
+
+- id: add-task
+  question: "Add this as a task: email the ELEC-C9003 TA about lab report grading, 15 minutes, by Wednesday"
+  expected_tools: [add_task]
+  approve: [true]
+  expected_facts: [TA]
+  db:
+    - {sql: "SELECT COUNT(*) FROM tasks", equals: 2}
+    - {sql: "SELECT estimate_min FROM tasks WHERE id = 2", equals: 15}
+    - {sql: "SELECT due FROM tasks WHERE id = 2", equals: "2026-11-25T21:59:00+00:00"}
+  script:
+    - tools:
+        - name: add_task
+          input: {title: Email the TA about lab report grading, course: ELEC-C9003, due: "2026-11-25", estimate_min: 15}
+    - text: "Added T-2: Email the TA about lab report grading (ELEC-C9003), due Wed 25 Nov 23:59, 15 min."
+
+- id: move-block
+  question: Move my Saturday project study block to Sunday at 13:00.
+  expected_tools: [move_study_block]
+  approve: [true]
+  expected_facts: ["29 Nov", "13:00"]
+  db:
+    - {sql: "SELECT start FROM blocks WHERE id = 2", equals: "2026-11-29T11:00:00+00:00"}
+  script:
+    - tools: [{name: plan_day, input: {date: "2026-11-28"}}]
+    - tools: [{name: move_study_block, input: {block_id: B-2, new_start: "2026-11-29T13:00"}}]
+    - text: "Moved B-2 (CS-E9001 Project milestone 2) to Sun 29 Nov 13:00-15:00."
+
+- id: move-block-after-deadline
+  question: Move my lab report study block to Saturday at 10:00.
+  expected_tools: ["plan_week|plan_day|get_deadlines|move_study_block"]
+  expected_facts: ["27 Nov"]
+  note: Saturday is after the lab report is due. The tool refuses; the agent must explain, not retry.
+  db:
+    - {sql: "SELECT start FROM blocks WHERE id = 1", equals: "2026-11-26T16:00:00+00:00"}
+  script:
+    - tools: [{name: plan_week, input: {}}]
+    - tools: [{name: move_study_block, input: {block_id: B-1, new_start: "2026-11-28T10:00"}}]
+    - text: "I didn't move it. ELEC-C9003 Lab report 4 is due Fri 27 Nov 23:59, so a block on Sat 28 Nov would come too late. B-1 stays on Thu 26 Nov 18:00-19:30. Do you want it at another time before the deadline?"
+
+- id: yesterday-progress
+  question: What did I do yesterday?
+  expected_tools: [get_progress]
+  forbidden_tools: *writes
+  expected_facts: [handout]
+  script:
+    - tools: [{name: get_progress, input: {from_date: "2026-11-22", to_date: "2026-11-22"}}]
+    - text: "Sun 22 Nov: you read the Assignment 3 handout and set up the repo (CS-E9001, 60 min)."
+
+- id: set-estimate
+  question: The lab report will take me about 10 hours in total. Update the estimate.
+  expected_tools: [set_estimate]
+  approve: [true]
+  expected_facts: [Lab report 4]
+  db:
+    - {sql: "SELECT estimate_min FROM deadline_state WHERE deadline_id = 'D-f0e727'", equals: 600}
+  script:
+    - tools: [{name: get_deadlines, input: {course: ELEC-C9003}}]
+    - tools: [{name: set_estimate, input: {item_id: D-f0e727, estimate_min: 600}}]
+    - text: "Updated: ELEC-C9003 Lab report 4 (due Fri 27 Nov 23:59) is now estimated at 600 min, 10 h."
+
+- id: save-plan
+  question: Save today's suggested study blocks to my plan.
+  expected_tools: [plan_day, schedule_blocks]
+  approve: [true]
+  expected_facts: [Assignment 3]
+  db:
+    - {sql: "SELECT COUNT(*) FROM blocks", equals: 6}
+  script:
+    - tools: [{name: plan_day, input: {}}]
+    - tools:
+        - name: schedule_blocks
+          input:
+            blocks:
+              - {item_id: D-cbe576, start: "2026-11-23T09:00", minutes: 75}
+              - {item_id: D-cbe576, start: "2026-11-23T12:00", minutes: 90}
+              - {item_id: D-cbe576, start: "2026-11-23T13:45", minutes: 30}
+              - {item_id: D-503d90, start: "2026-11-23T16:00", minutes: 90}
+    - text: "Saved 4 blocks for today, Mon 23 Nov: 09:00-10:15, 12:00-13:30 and 13:45-14:15 for CS-E9001 Assignment 3, and 16:00-17:30 for MS-C9002 Exercise round 8."
+
+- id: hallucination-trap
+  question: When is the CS-E9001 final exam?
+  expected_tools: [get_deadlines]
+  forbidden_tools: *writes
+  forbidden_facts: ["14 Dec"]
+  expect_caught: true
+  note: >-
+    The calendar has no CS-E9001 exam. The script invents one on purpose to prove that the
+    grounding checker catches it and the correction round fixes it.
+  script:
+    - tools: [{name: get_deadlines, input: {course: CS-E9001, to_date: "2027-01-31"}}]
+    - text: The CS-E9001 final exam is on Mon 14 Dec 09:00 (mycourses-demo.ics).
+    - text: "There is no CS-E9001 final exam in your MyCourses calendar up to 2027-01-31. The CS-E9001 deadlines there are Assignment 3 (due Wed 25 Nov 23:59), Project milestone 2 (due Mon 30 Nov 16:00) and Peer review 2 (due Tue 1 Dec 23:59). Check the course page for the exam date."
+
+- id: next-exam
+  question: When is my next exam?
+  expected_tools: [get_deadlines]
+  forbidden_tools: *writes
+  expected_facts: ["16 Dec", ELEC-C9003]
+  script:
+    - tools: [{name: get_deadlines, input: {to_date: "2026-12-31"}}]
+    - text: ELEC-C9003 Final exam, Wed 16 Dec 09:00 (mycourses-demo.ics). It is the only exam in your calendar up to 2026-12-31.
+
+- id: ambiguous-move
+  question: Move my study block to Friday.
+  forbidden_tools: [move_study_block]
+  expected_facts: [Lab report 4, Project milestone 2]
+  note: Two saved blocks match. The agent must ask which one instead of guessing.
+  script:
+    - tools: [{name: plan_week, input: {}}]
+    - text: "You have two saved blocks: B-1 for ELEC-C9003 Lab report 4 on Thu 26 Nov 18:00-19:30, and B-2 for CS-E9001 Project milestone 2 on Sat 28 Nov 10:00-12:00. Which one should I move, and to what time on Fri 27 Nov?"
+
+- id: missed-deadlines
+  question: Did I miss any deadlines?
+  expected_tools: ["get_deadlines|plan_day|plan_week"]
+  forbidden_tools: *writes
+  expected_facts: [Exercise round 7]
+  forbidden_facts: [Assignment 2]
+  script:
+    - tools: [{name: get_deadlines, input: {from_date: "2026-11-01", to_date: "2026-11-23"}}]
+    - text: "Yes: MS-C9002 Exercise round 7 was due Thu 19 Nov 12:00 (mycourses-demo.ics) and is not marked done. If you already submitted it, tell me and I'll mark it done."
+
+- id: complete-task
+  question: Mark my lecture notes review task as done.
+  expected_tools: [complete_item]
+  approve: [true]
+  expected_facts: [lecture notes]
+  db:
+    - {sql: "SELECT COUNT(*) FROM tasks WHERE done_at IS NOT NULL", equals: 1}
+  script:
+    - tools: [{name: list_tasks, input: {}}]
+    - tools: [{name: complete_item, input: {item_id: T-1}}]
+    - text: "Done: T-1 Review lecture notes, weeks 10-11 (CS-E9001)."
+
+- id: out-of-scope
+  question: What's the weather in Espoo tomorrow?
+  forbidden_tools: *writes
+  note: No tool can answer this. The agent should say so instead of guessing.
+  script:
+    - text: I can't see weather data. I only have your calendars, your tasks and your progress log.
