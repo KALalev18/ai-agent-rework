@@ -1,33 +1,37 @@
-"""FastAPI backend for the local web UI.
+"""FastAPI backend for the local web app.
 
 Design:
-- The dashboard (risks, today's timeline, deadlines) calls the deterministic tools directly. No
-  model call, so it is free and instant.
-- A question starts the same Agent as the CLI in a background thread. The browser polls
-  /api/runs/{id} for new events (tool calls, proposals, the answer). Polling is simpler than
-  WebSockets or SSE and is plenty for one user on localhost.
-- Human approval: when a write tool returns a proposal, the agent thread blocks until I click
-  Approve or Decline (POST /api/runs/{id}/decision). No answer in 10 minutes means declined.
+- Every page reads through the same deterministic tools the agent uses, so the UI, the CLI and
+  the agent always agree. No model call is needed to show data.
+- Every change goes through a write tool's Proposal. From a button, the UI first asks
+  /preview (validation + the proposal text), shows it, and only then calls the action. The
+  click is the approval. From the assistant, the agent thread blocks until I click Approve or
+  Decline. Either way the same validation runs (no overlaps, nothing after the deadline).
+- The assistant runs the Agent in a background thread; the browser polls /api/runs/{id} for
+  events. Polling is simpler than WebSockets or SSE and is plenty for one user on localhost.
 
 Security for a local app: it binds to 127.0.0.1, only accepts localhost Host headers (blocks DNS
 rebinding), and every POST needs an `X-Study-Agent` header. Browsers cannot add custom headers
 to cross-site requests without a CORS preflight, which this app never allows, so another website
-cannot start runs or approve changes through my browser.
+cannot start runs or apply changes through my browser.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import tempfile
 import threading
+import time
 import uuid
+from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Body, Depends, FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -36,18 +40,40 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from study_agent.agent import Agent, AgentResult
 from study_agent.config import Settings
 from study_agent.demo import demo_clock, demo_settings, seed
-from study_agent.evals import load_cases, run_case
+from study_agent.evals import load_cases, run_case, summarize
 from study_agent.llm import AnthropicModel, LLMError, ModelClient
+from study_agent.planner import suggest_blocks
 from study_agent.render import footer
 from study_agent.runlog import log_run
-from study_agent.sources.loader import Calendars, SourceError
-from study_agent.store import Store
-from study_agent.timeutil import Clock, fmt_moment, system_clock
-from study_agent.tools import Proposal, ToolContext, get_deadlines, plan_day
+from study_agent.sources.loader import Calendars, SourceError, is_url
+from study_agent.stats import compute_stats
+from study_agent.store import Block, Store
+from study_agent.timeutil import (
+    Clock,
+    day_bounds,
+    fmt_day,
+    fmt_moment,
+    iso,
+    minutes_between,
+    monday_of,
+    parse_day,
+    system_clock,
+)
+from study_agent.tools import (
+    TOOLS,
+    Proposal,
+    ToolContext,
+    execute,
+    get_progress,
+    item_dict,
+    plan_day,
+)
 
 STATIC_DIR = Path(__file__).parent / "static"
 APPROVAL_TIMEOUT_S = 600
 MAX_RUNS_KEPT = 50
+WRITE_TOOLS = {tool.name for tool in TOOLS if tool.writes}
+ToolArgs = Annotated[dict[str, Any] | None, Body()]
 log = logging.getLogger(__name__)
 
 
@@ -117,6 +143,25 @@ def _answer(result: AgentResult, mode: str, settings: Settings) -> dict[str, Any
     }
 
 
+def _block_dict(block: Block) -> dict[str, Any]:
+    return {
+        "block_id": block.ref,
+        "item_id": block.item_id,
+        "course": block.course,
+        "title": block.title,
+        "start": iso(block.start),
+        "end": iso(block.end),
+        "when": f"{fmt_moment(block.start)}-{block.end:%H:%M}",
+        "minutes": minutes_between(block.start, block.end),
+    }
+
+
+def _source_label(source: str | None) -> str:
+    if not source:
+        return "not set"
+    return "private URL (hidden)" if is_url(source) else Path(source).name
+
+
 def create_app(
     settings: Settings,
     demo: bool = False,
@@ -126,7 +171,8 @@ def create_app(
     clock: Clock = system_clock
     demo_cases = {c.question: c for c in load_cases()} if demo else {}
     if demo:
-        # A seeded copy of the fictional semester, so the dashboard has something to show.
+        # A seeded copy of the fictional semester. Changes made with buttons persist in it for
+        # the session; assistant answers are scripted replays on fresh copies.
         demo_dir = Path(tempfile.mkdtemp(prefix="study-agent-demo-"))
         settings = demo_settings(demo_dir, replace(settings, data_dir=demo_dir))
         seed_store = Store(settings.db_path)
@@ -139,40 +185,329 @@ def create_app(
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     runs: dict[str, Run] = {}
     conversations: dict[str, list[dict[str, Any]]] = {}
+    calendars_lock = threading.Lock()
+    shared_calendars: dict[str, tuple[Calendars, float]] = {}
 
     def require_app_header(x_study_agent: str | None = Header(default=None)) -> None:
         if x_study_agent != "1":
             raise HTTPException(403, "missing X-Study-Agent header")
 
+    def calendars(fresh: bool = False) -> Calendars:
+        # Parsed calendars are reused across requests and rebuilt every hour (the loader itself
+        # only re-downloads when its cache is older than STUDY_SYNC_MAX_AGE_HOURS).
+        with calendars_lock:
+            cached = shared_calendars.get("c")
+            if fresh or cached is None or time.monotonic() - cached[1] > 3600:
+                cached = (Calendars(settings, clock), time.monotonic())
+                shared_calendars["c"] = cached
+            return cached[0]
+
     def open_context() -> tuple[Store, ToolContext]:
         # One SQLite connection per request/thread: sqlite3 objects must stay in their thread.
         store = Store(settings.db_path)
-        return store, ToolContext(settings, store, Calendars(settings, clock), clock)
+        return store, ToolContext(settings, store, calendars(), clock)
+
+    def with_context(fn: Callable[[Store, ToolContext], Any]) -> Any:
+        store, ctx = open_context()
+        try:
+            return fn(store, ctx)
+        except SourceError as exc:
+            raise HTTPException(503, str(exc)) from None
+        finally:
+            store.close()
 
     @app.get("/")
     def index() -> FileResponse:
         return FileResponse(STATIC_DIR / "index.html")
 
+    # --- read endpoints -----------------------------------------------------------------------
+
     @app.get("/api/overview")
     def overview() -> dict[str, Any]:
-        store, ctx = open_context()
-        try:
-            horizon = ctx.today() + timedelta(days=14)
-            deadlines = get_deadlines(ctx, {"to_date": horizon.isoformat()})
+        def build(store: Store, ctx: ToolContext) -> dict[str, Any]:
+            now = ctx.now()
+            items = ctx.items()
+            risks = ctx.risks(items)
             today = plan_day(ctx, {})
-        except SourceError as exc:
-            raise HTTPException(503, str(exc)) from None
+            week_end = now + timedelta(days=7)
+            coming = sorted(
+                (i for i in items if i.due and now <= i.due <= week_end), key=lambda i: i.due or now
+            )
+            logged = [p for p in store.progress_between(now - timedelta(days=7), now) if p.minutes]
+            done_week = sum(
+                1
+                for s in store.deadline_states().values()
+                if s.done_at and s.done_at >= now - timedelta(days=7)
+            ) + sum(
+                1
+                for t in store.tasks(include_done=True)
+                if t.done_at and t.done_at >= now - timedelta(days=7)
+            )
+            return {
+                "mode": "demo" if demo else "live",
+                "model": settings.model,
+                "now": fmt_moment(now),
+                "now_iso": iso(now),
+                "today": today,
+                "coming_up": [item_dict(i, risks.get(i.id)) for i in coming],
+                "stats": {
+                    "due_this_week": len(coming),
+                    "at_risk": sum(1 for r in risks.values() if r.status in ("at_risk", "overdue")),
+                    "tight": sum(1 for r in risks.values() if r.status == "tight"),
+                    "planned_today_min": sum(b["minutes"] for b in today["suggested_blocks"])
+                    + sum(
+                        minutes_between(
+                            datetime.fromisoformat(b["start"]), datetime.fromisoformat(b["end"])
+                        )
+                        for b in today["saved_blocks"]
+                    ),
+                    "logged_week_min": sum(p.minutes or 0 for p in logged),
+                    "done_week": done_week,
+                },
+                "warnings": ctx.calendars.warnings,
+                "demo_questions": list(demo_cases),
+            }
+
+        result: dict[str, Any] = with_context(build)
+        return result
+
+    @app.get("/api/items")
+    def items(include_done: bool = False) -> dict[str, Any]:
+        def build(store: Store, ctx: ToolContext) -> dict[str, Any]:
+            open_items = ctx.items()
+            risks = ctx.risks(open_items)
+            far = ctx.now() + timedelta(days=3650)
+            ordered = sorted(open_items, key=lambda i: (i.due or far, i.id))
+            done: list[dict[str, Any]] = []
+            if include_done:
+                states = store.deadline_states()
+                for deadline in ctx.calendars.deadlines():
+                    state = states.get(deadline.id)
+                    if state and state.done_at:
+                        done.append(
+                            {
+                                **deadline.to_dict(),
+                                "kind": "deadline",
+                                "done_at": fmt_moment(state.done_at),
+                            }
+                        )
+                for task in store.tasks(include_done=True):
+                    if task.done_at:
+                        done.append(
+                            {
+                                "id": task.ref,
+                                "kind": "task",
+                                "course": task.course or "-",
+                                "title": task.title,
+                                "done_at": fmt_moment(task.done_at),
+                            }
+                        )
+            courses = sorted({i.course for i in open_items} | {d["course"] for d in done})
+            return {
+                "now": iso(ctx.now()),
+                "items": [item_dict(i, risks.get(i.id)) for i in ordered],
+                "done": done,
+                "courses": courses,
+            }
+
+        result: dict[str, Any] = with_context(build)
+        return result
+
+    @app.get("/api/items/{item_id}")
+    def item_detail(item_id: str) -> dict[str, Any]:
+        def build(store: Store, ctx: ToolContext) -> dict[str, Any]:
+            open_items = ctx.items()
+            risks = ctx.risks(open_items)
+            item = next((i for i in open_items if i.id.upper() == item_id.upper()), None)
+            if item is None:
+                raise HTTPException(404, "no open deadline or task with that id")
+            return {
+                "item": item_dict(item, risks.get(item.id)),
+                "progress": [
+                    {"logged": fmt_moment(p.logged_at), "text": p.text, "minutes": p.minutes}
+                    for p in store.progress_for(item.id)
+                ],
+                "blocks": [_block_dict(b) for b in store.blocks_for(item.id)],
+            }
+
+        result: dict[str, Any] = with_context(build)
+        return result
+
+    @app.get("/api/week")
+    def week(start: str | None = None) -> dict[str, Any]:
+        def build(store: Store, ctx: ToolContext) -> dict[str, Any]:
+            try:
+                first = monday_of(parse_day(start, ctx.today()))
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from None
+            days = [first + timedelta(days=n) for n in range(7)]
+            lo, _ = day_bounds(days[0])
+            _, hi = day_bounds(days[-1])
+            now = ctx.now()
+            events = ctx.calendars.events(days[0], days[-1])
+            open_items = ctx.items()
+            risks = ctx.risks(open_items)
+            future_saved = store.blocks_between(now, now + timedelta(days=120))
+            upcoming = [d for d in days if d >= ctx.today()]
+            suggested = suggest_blocks(upcoming, open_items, events, future_saved, now, settings)
+            return {
+                "start": days[0].isoformat(),
+                "label": f"{fmt_day(days[0])} - {fmt_day(days[-1])}",
+                "today": ctx.today().isoformat(),
+                "now": iso(now),
+                "window": [f"{settings.day_start:%H:%M}", f"{settings.day_end:%H:%M}"],
+                "days": [{"date": d.isoformat(), "label": fmt_day(d)} for d in days],
+                "events": [e.to_dict() for e in events],
+                "saved": [_block_dict(b) for b in store.blocks_between(lo, hi)],
+                "suggested": [
+                    {
+                        "item_id": s.item_id,
+                        "course": s.course,
+                        "title": s.title,
+                        "start": iso(s.start),
+                        "end": iso(s.end),
+                        "minutes": s.minutes,
+                    }
+                    for s in suggested
+                ],
+                "deadlines": [
+                    item_dict(i, risks.get(i.id)) for i in open_items if i.due and lo <= i.due < hi
+                ],
+            }
+
+        result: dict[str, Any] = with_context(build)
+        return result
+
+    @app.get("/api/progress")
+    def progress(days: int = 14) -> dict[str, Any]:
+        def build(store: Store, ctx: ToolContext) -> dict[str, Any]:
+            span = max(1, min(days, 120))
+            start = ctx.today() - timedelta(days=span - 1)
+            data = get_progress(ctx, {"from_date": start.isoformat(), "to_date": "today"})
+            lo, _ = day_bounds(start)
+            per_day: dict[str, int] = {
+                (start + timedelta(days=n)).isoformat(): 0 for n in range(span)
+            }
+            per_course: dict[str, int] = defaultdict(int)
+            for p in store.progress_between(lo, ctx.now() + timedelta(days=1)):
+                if p.minutes:
+                    per_day[p.logged_at.date().isoformat()] = (
+                        per_day.get(p.logged_at.date().isoformat(), 0) + p.minutes
+                    )
+                    per_course[p.course or "other"] += p.minutes
+            return {
+                **data,
+                "per_day": [
+                    {"date": d, "label": fmt_day(datetime.fromisoformat(d).date()), "minutes": m}
+                    for d, m in per_day.items()
+                ],
+                "per_course": dict(sorted(per_course.items(), key=lambda kv: -kv[1])),
+            }
+
+        result: dict[str, Any] = with_context(build)
+        return result
+
+    @app.get("/api/stats")
+    def stats() -> dict[str, Any]:
+        store = Store(settings.db_path)
+        try:
+            rows = store.runs(mode="live")
+            report = compute_stats(rows, settings.eur_per_usd)
+            recent = [
+                {
+                    "when": fmt_moment(datetime.fromisoformat(r["started_at"])),
+                    "command": r["command"],
+                    "question": r["question"],
+                    "tool_calls": r["tool_calls"],
+                    "latency_s": round(r["latency_ms"] / 1000, 1),
+                    "cost_eur": round(r["cost_usd"] * settings.eur_per_usd, 4),
+                    "grounded": not r["ungrounded"],
+                    "corrected": bool(r["corrected"]),
+                }
+                for r in reversed(rows[-20:])
+            ]
         finally:
             store.close()
+        return {"report": report, "recent": recent}
+
+    @app.get("/api/settings")
+    def settings_view() -> dict[str, Any]:
         return {
             "mode": "demo" if demo else "live",
             "model": settings.model,
-            "now": fmt_moment(ctx.now()),
-            "today": today,
-            "deadlines": deadlines["deadlines"],
-            "warnings": ctx.calendars.warnings,
-            "demo_questions": list(demo_cases),
+            "effort": settings.effort,
+            "max_rounds": settings.max_rounds,
+            "study_window": f"{settings.day_start:%H:%M}-{settings.day_end:%H:%M}",
+            "daily_cap_min": settings.daily_study_cap_min,
+            "max_block_min": settings.max_block_min,
+            "deadlines_source": _source_label(settings.deadlines_source),
+            "timetable_source": _source_label(settings.timetable_source),
+            "sync_max_age_hours": settings.sync_max_age_hours,
+            "data_dir": str(settings.data_dir),
+            "tools": [{"name": t.name, "writes": t.writes} for t in TOOLS],
         }
+
+    # --- changes from buttons: preview (validation + proposal), then apply --------------------
+
+    def _run_action(name: str, args: dict[str, Any], apply: bool) -> dict[str, Any]:
+        if name not in WRITE_TOOLS:
+            raise HTTPException(404, f"unknown action {name}")
+        captured: list[Proposal] = []
+
+        def decide(proposal: Proposal) -> bool:
+            captured.append(proposal)
+            return apply  # preview: validate and describe, never write
+
+        def run(store: Store, ctx: ToolContext) -> dict[str, Any]:
+            return json.loads(execute(name, args, ctx, decide).content)  # type: ignore[no-any-return]
+
+        payload: dict[str, Any] = with_context(run)
+        if "error" in payload:
+            raise HTTPException(400, payload["error"])
+        if not apply:
+            proposal = captured[0]
+            return {"action": proposal.action, "lines": proposal.lines}
+        return payload
+
+    @app.post("/api/actions/{name}/preview", dependencies=[Depends(require_app_header)])
+    def preview(name: str, args: ToolArgs = None) -> dict[str, Any]:
+        return _run_action(name, args or {}, apply=False)
+
+    @app.post("/api/actions/{name}", dependencies=[Depends(require_app_header)])
+    def action(name: str, args: ToolArgs = None) -> dict[str, Any]:
+        return _run_action(name, args or {}, apply=True)
+
+    @app.post("/api/sync", dependencies=[Depends(require_app_header)])
+    def sync() -> dict[str, Any]:
+        if demo:
+            raise HTTPException(400, "demo mode uses bundled calendars; nothing to sync")
+        fresh = calendars(fresh=True)
+        try:
+            counts = fresh.sync(force=True)
+        except SourceError as exc:
+            raise HTTPException(503, str(exc)) from None
+        return {"counts": counts, "warnings": fresh.warnings}
+
+    @app.post("/api/eval", dependencies=[Depends(require_app_header)])
+    def run_eval() -> dict[str, Any]:
+        results = [run_case(case, settings) for case in load_cases()]
+        return {
+            "summary": summarize(results),
+            "cases": [
+                {
+                    "id": r.case.id,
+                    "question": r.case.question,
+                    "passed": r.passed,
+                    "source": r.source,
+                    "tools": [c.name for c in r.result.tool_calls] if r.result else [],
+                    "caught": r.caught,
+                    "problems": r.problems,
+                }
+                for r in results
+            ],
+        }
+
+    # --- the assistant ------------------------------------------------------------------------
 
     def run_live(run: Run, body: AskBody) -> None:
         store, ctx = open_context()

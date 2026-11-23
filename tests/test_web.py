@@ -41,11 +41,11 @@ def live_client(settings: Settings, script: list[dict[str, Any]]) -> TestClient:
 def test_index_and_demo_overview(settings: Settings) -> None:
     client = TestClient(create_app(settings, demo=True, allowed_hosts=HOSTS))
     assert "Study Agent" in client.get("/").text
-    assert client.get("/static/app.js").status_code == 200
+    assert client.get("/static/js/main.js").status_code == 200
     data = client.get("/api/overview").json()
     assert data["mode"] == "demo"
     assert data["now"] == "Mon 23 Nov 08:00"
-    assert {d["title"] for d in data["deadlines"]} >= {"Lab report 4", "Quiz 5"}
+    assert {d["title"] for d in data["coming_up"]} >= {"Lab report 4", "Quiz 5"}
     assert any(r["risk"] == "at_risk" for r in data["today"]["at_risk"])
     assert data["today"]["events"] and data["today"]["suggested_blocks"]
     assert len(data["demo_questions"]) >= 20
