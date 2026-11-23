@@ -6,9 +6,12 @@
 ![Python 3.12](https://img.shields.io/badge/python-3.12-blue) ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 
 ```bash
-uv run study demo      # try it now: fictional semester, no API key needed
-uv run study today     # my real morning brief (needs an API key and my calendar URL)
+uv run study web --demo   # web dashboard + chat on a fictional semester, no API key needed
+uv run study demo         # the same in the terminal
+uv run study today        # my real morning brief (needs an API key and my calendar URL)
 ```
+
+![The web UI: risks, today's timeline and deadlines on the left; the agent's tool calls, an approval card and the grounding checker on the right](docs/web.png)
 
 ![A real run of `study demo`: morning brief, an approval prompt, and the grounding checker catching an invented exam date](docs/demo.svg)
 
@@ -20,6 +23,7 @@ uv run study today     # my real morning brief (needs an API key and my calendar
 
 | Command | What happens |
 |---|---|
+| `study web` | Local web app at `http://127.0.0.1:8765`: dashboard (risks, today's timeline, deadlines) and a chat with **Approve / Decline** buttons for every change |
 | `study today` | Morning brief: today's lectures, suggested study blocks in free time, everything overdue / at risk / tight, deadlines in the next 7 days |
 | `study week` | The next 7 days, one line per day, plus risks |
 | `study ask "..."` | Any question: *"What's due this week?"*, *"Why is the project at risk?"*, *"Move my Saturday block to Sunday 13:00"* |
@@ -35,6 +39,7 @@ uv run study today     # my real morning brief (needs an API key and my calendar
 ```mermaid
 flowchart LR
     CLI["CLI<br/>study today / ask / done"] --> Loop["Agent loop<br/>(plain Python, max 8 rounds)"]
+    Web["Web UI (FastAPI)<br/>dashboard + chat + Approve/Decline"] --> Loop
     Loop <-->|"messages + 12 tool schemas<br/>(prompt-cached)"| Claude["Claude API<br/>claude-opus-5-5"]
     Loop --> Tools["Tools"]
     Tools --> Read["Read-only (run freely)<br/>get_deadlines, get_timetable,<br/>plan_day, plan_week,<br/>list_tasks, get_progress"]
@@ -47,6 +52,17 @@ flowchart LR
     Loop --> Checker["Grounding checker<br/>dates, times, course codes"]
     Checker -->|"ungrounded: 1 correction round"| Loop
 ```
+
+## Web UI
+
+`study web` runs the **same** agent, tools, approval gate and grounding checker as the CLI; the web layer ([`web/app.py`](src/study_agent/web/app.py), FastAPI + plain JavaScript, no build step) only adds transport.
+
+- **Dashboard without the model.** Risks, today's timeline (lectures, saved and suggested study blocks) and the 14-day deadline table come straight from the deterministic tools: free, instant, and the same data the agent sees.
+- **Live trace.** Each question runs the agent in a background thread; the page polls for events and shows every tool call, refusal and grounding correction as it happens. Polling is simpler than WebSockets and plenty for one user on localhost.
+- **Approval in the browser.** When a write tool returns a proposal, the agent thread blocks until I click Approve or Decline. No answer within 10 minutes means declined. Nothing is written while it waits; a test checks this over HTTP.
+- **Local-only by design.** It binds to `127.0.0.1`, accepts only localhost `Host` headers (blocks DNS rebinding), and every POST needs an `X-Study-Agent` header. Browsers can't add that header to a cross-site request without a CORS preflight, which the app never allows, so another website can't start runs (spending my API budget) or approve changes through my browser. Calendar titles and answers are inserted as text or HTML-escaped, never as raw HTML.
+
+The screenshot above is a real `study web --demo` page in headless Edge; in demo mode the model turns are scripted, so the approval card shows the scripted decision instead of buttons.
 
 ## Why I built it
 
@@ -154,7 +170,7 @@ Every number here comes from a command in this table. Numbers I have not measure
 
 | What | Result | Command |
 |---|---|---|
-| Tests | **125 passed**, 89% branch coverage | `uv run pytest --cov` |
+| Tests | **133 passed**, 89% branch coverage | `uv run pytest --cov` |
 | Eval, replay mode | **22/22** cases; 0 ungrounded claims after the check; the checker caught the 2 planted claims in `hallucination-trap` | `uv run study eval` |
 | Eval, live mode | *pending* | `uv run study eval --live --record` |
 | `study today` latency p50 / p95 | *pending, needs daily use* | `uv run study stats` |
@@ -172,6 +188,7 @@ Every number here comes from a command in this table. Numbers I have not measure
 ```bash
 git clone https://github.com/KALalev18/ai-agent-rework.git && cd ai-agent-rework
 uv sync
+uv run study web --demo    # opens http://127.0.0.1:8765
 uv run study demo
 uv run study eval
 ```
@@ -181,7 +198,7 @@ uv run study eval
 1. `cp .env.example .env`, then set `ANTHROPIC_API_KEY`.
 2. In MyCourses, open *Calendar → Export calendar*, export all course events for *Recent and next 60 days*, click *Get calendar URL*, and paste it into `STUDY_DEADLINES_ICS`.
 3. Set `STUDY_TIMETABLE` to your timetable `.ics` URL or file, or to a YAML file like [`docs/timetable.example.yaml`](docs/timetable.example.yaml).
-4. `uv run study sync`, then `uv run study deadlines` (no model call; check the data first), then `uv run study today`.
+4. `uv run study sync`, then `uv run study deadlines` (no model call; check the data first), then `uv run study today` or `uv run study web`.
 
 On Windows machines where an Application Control policy blocks the generated `study.exe`, use `uv run python -m study_agent today`; it is the same entry point.
 
@@ -199,8 +216,9 @@ src/study_agent/
   sources/        .ics + YAML parsing, download cache
   store.py        SQLite: tasks, progress, blocks, run log
   evals/          22 cases + runner;  demo/  fictional semester
-  cli.py, render.py, stats.py
-tests/            125 tests: parsing, DST, planner, approval gate, checker, loop, live request shape
+  web/            FastAPI backend + static HTML/CSS/JS dashboard and chat
+  cli.py, render.py, stats.py, runlog.py
+tests/            133 tests: parsing, DST, planner, approval gate, checker, loop, live request shape, web
 ```
 
 ## What I'd do next
