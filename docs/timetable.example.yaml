@@ -1,0 +1,16 @@
+# Weekly timetable for courses whose schedule is not in an .ics export.
+# Copy to my-timetable.yaml (gitignored) and point STUDY_TIMETABLE at it.
+- course: CS-E4780
+  kind: lecture
+  weekday: mon
+  start: "10:15"
+  end: "12:00"
+  from: 2026-09-07
+  until: 2026-12-11
+- course: CS-E4780
+  kind: exercise
+  weekday: thu
+  start: "14:15"
+  end: "16:00"
+  from: 2026-09-10
+  until: 2026-12-10
