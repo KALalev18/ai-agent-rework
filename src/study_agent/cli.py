@@ -8,14 +8,15 @@ from collections.abc import Sequence
 from datetime import timedelta
 
 from study_agent import render
-from study_agent.agent import Agent, AgentResult
+from study_agent.agent import Agent
 from study_agent.config import ConfigError, Settings, load_settings
 from study_agent.evals import CaseResult, load_cases, run_case, summarize
 from study_agent.llm import AnthropicModel, LLMError
 from study_agent.planner import RISKY_ORDER
+from study_agent.runlog import log_run
 from study_agent.sources.loader import Calendars, SourceError
 from study_agent.stats import compute_stats
-from study_agent.store import RunRecord, Store
+from study_agent.store import Store
 from study_agent.timeutil import day_bounds, fmt_moment, system_clock
 from study_agent.tools import ToolContext
 
@@ -38,35 +39,6 @@ def _context(settings: Settings, offline: bool) -> tuple[Store, ToolContext]:
     return store, ToolContext(settings, store, calendars, system_clock)
 
 
-def _record(store: Store, command: str, question: str, result: AgentResult, s: Settings) -> None:
-    started = system_clock() - timedelta(milliseconds=result.latency_ms)
-    run_id = store.record_run(
-        RunRecord(
-            command=command,
-            mode="live",
-            model=s.model,
-            question=question,
-            answer=result.answer,
-            rounds=result.rounds,
-            tool_calls=len(result.tool_calls),
-            input_tokens=result.usage.input_tokens,
-            output_tokens=result.usage.output_tokens,
-            cache_read_tokens=result.usage.cache_read,
-            cache_write_tokens=result.usage.cache_write,
-            cost_usd=result.cost_usd or 0.0,
-            latency_ms=result.latency_ms,
-            ungrounded=len(result.grounding.unsupported),
-            corrected=result.corrected,
-            stop_reason=result.stop_reason,
-        ),
-        started,
-    )
-    for call in result.tool_calls:
-        store.record_tool_call(
-            run_id, call.name, call.input, call.ok, call.approved, call.latency_ms
-        )
-
-
 def run_question(settings: Settings, command: str, question: str, offline: bool) -> int:
     store, ctx = _context(settings, offline)
     try:
@@ -76,7 +48,7 @@ def run_question(settings: Settings, command: str, question: str, offline: bool)
         for warning in ctx.calendars.warnings:
             console.print(f"[yellow]  !  {warning}[/]")
         render.show_answer(result, "live", settings.eur_per_usd)
-        _record(store, command, question, result, settings)
+        log_run(store, command, question, result, settings)
     finally:
         store.close()
     return 0
@@ -98,7 +70,7 @@ def chat(settings: Settings, offline: bool) -> int:
             result = agent.run(question, history)
             history = result.messages
             render.show_answer(result, "live", settings.eur_per_usd)
-            _record(store, "chat", question, result, settings)
+            log_run(store, "chat", question, result, settings)
     finally:
         store.close()
     return 0
@@ -233,6 +205,24 @@ def demo(settings: Settings) -> int:
     return 0
 
 
+def web(settings: Settings, demo_mode: bool, port: int, open_browser: bool) -> int:
+    import threading
+    import webbrowser
+
+    import uvicorn
+
+    from study_agent.web import create_app
+
+    app = create_app(settings, demo=demo_mode)
+    url = f"http://127.0.0.1:{port}"
+    label = "demo, fictional semester" if demo_mode else f"live, {settings.model}"
+    console.print(f"[bold]Study Agent web UI[/] ({label}): {url}  [dim]Ctrl+C to stop[/]")
+    if open_browser:
+        threading.Timer(1.0, webbrowser.open, [url]).start()
+    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="study", description="A personal AI agent that plans my study days."
@@ -257,6 +247,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("sync", help="download the calendars now")
     sub.add_parser("stats", help="days used, cost, latency and grounding from the run log")
     sub.add_parser("demo", help="run on a fictional semester without an API key")
+    p = sub.add_parser("web", help="local web dashboard and chat (http://127.0.0.1:8765)")
+    p.add_argument("--demo", action="store_true", help="fictional semester, no API key needed")
+    p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--no-browser", action="store_true", help="do not open a browser tab")
     p = sub.add_parser("eval", help="run the evaluation set")
     p.add_argument("--live", action="store_true", help="call the real API (costs money)")
     p.add_argument("--record", action="store_true", help="with --live: save responses")
@@ -290,6 +284,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return stats(settings)
         if command == "demo":
             return demo(settings)
+        if command == "web":
+            return web(settings, args.demo, args.port, not args.no_browser)
         if command == "eval":
             if args.record and not args.live:
                 console.print("[red]--record needs --live[/]")
