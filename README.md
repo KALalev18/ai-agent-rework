@@ -11,7 +11,9 @@ uv run study demo         # the same in the terminal
 uv run study today        # my real morning brief (needs an API key and my calendar URL)
 ```
 
-![The web UI: risks, today's timeline and deadlines on the left; the agent's tool calls, an approval card and the grounding checker on the right](docs/web.png)
+![The Today page: greeting, stat cards, today's plan with lectures and suggested study blocks, and the deadlines that need attention with Log / Estimate / Done actions](docs/web.png)
+
+![The Planner: a week grid with lectures, draggable saved study blocks, dashed suggestions you click to save, and deadline flags](docs/planner.png)
 
 ![A real run of `study demo`: morning brief, an approval prompt, and the grounding checker catching an invented exam date](docs/demo.svg)
 
@@ -23,7 +25,7 @@ uv run study today        # my real morning brief (needs an API key and my calen
 
 | Command | What happens |
 |---|---|
-| `study web` | Local web app at `http://127.0.0.1:8765`: dashboard (risks, today's timeline, deadlines) and a chat with **Approve / Decline** buttons for every change |
+| `study web` | Local web app at `http://127.0.0.1:8765`: Today, Planner (drag-and-drop week), Deadlines, Tasks, Progress, Assistant, Insights (with a live eval runner) and Settings |
 | `study today` | Morning brief: today's lectures, suggested study blocks in free time, everything overdue / at risk / tight, deadlines in the next 7 days |
 | `study week` | The next 7 days, one line per day, plus risks |
 | `study ask "..."` | Any question: *"What's due this week?"*, *"Why is the project at risk?"*, *"Move my Saturday block to Sunday 13:00"* |
@@ -39,11 +41,11 @@ uv run study today        # my real morning brief (needs an API key and my calen
 ```mermaid
 flowchart LR
     CLI["CLI<br/>study today / ask / done"] --> Loop["Agent loop<br/>(plain Python, max 8 rounds)"]
-    Web["Web UI (FastAPI)<br/>dashboard + chat + Approve/Decline"] --> Loop
-    Loop <-->|"messages + 12 tool schemas<br/>(prompt-cached)"| Claude["Claude API<br/>claude-opus-5-5"]
+    Web["Web app (FastAPI)<br/>8 pages + Approve/Decline"] --> Loop`n    Web -->|"buttons: preview, then apply"| Write
+    Loop <-->|"messages + 13 tool schemas<br/>(prompt-cached)"| Claude["Claude API<br/>claude-opus-5-5"]
     Loop --> Tools["Tools"]
     Tools --> Read["Read-only (run freely)<br/>get_deadlines, get_timetable,<br/>plan_day, plan_week,<br/>list_tasks, get_progress"]
-    Tools --> Write["Write (return a proposal)<br/>add_task, log_progress, complete_item,<br/>set_estimate, schedule_blocks, move_study_block"]
+    Tools --> Write["Write (return a proposal)<br/>add_task, log_progress, complete_item,<br/>set_estimate, schedule_blocks,<br/>move_study_block, delete_study_block"]
     Write --> Gate{"Approve? y/N"}
     Gate -->|y| DB[("SQLite<br/>tasks, progress, blocks,<br/>run log")]
     Read --> Planner["Planner<br/>EDF risk check, block filler"]
@@ -55,14 +57,27 @@ flowchart LR
 
 ## Web UI
 
-`study web` runs the **same** agent, tools, approval gate and grounding checker as the CLI; the web layer ([`web/app.py`](src/study_agent/web/app.py), FastAPI + plain JavaScript, no build step) only adds transport.
+`study web` runs the **same** agent, tools, approval gate and grounding checker as the CLI; the web layer ([`web/app.py`](src/study_agent/web/app.py), FastAPI + plain JavaScript ES modules, no build step) adds pages and transport, not new logic.
 
-- **Dashboard without the model.** Risks, today's timeline (lectures, saved and suggested study blocks) and the 14-day deadline table come straight from the deterministic tools: free, instant, and the same data the agent sees.
+| Page | What you can do |
+|---|---|
+| **Today** | Greeting and summary, 4 stat cards, today's plan with *Save* / *Remove* per block and *Save all*, everything that needs attention with *Log*, *Estimate*, *Done* |
+| **Planner** | Week grid with lectures, saved blocks and suggestions. **Drag a block to move it** (snaps to 15 min), click a suggestion to save it, click a deadline flag to open it, browse weeks |
+| **Deadlines / Tasks** | Search, course and date filters, status chips, finished items; a detail drawer with risk reasoning, progress, blocks and history; quick-add for tasks |
+| **Progress** | Log work against any item, time per day and per course, history by day |
+| **Assistant** | The agent with a live tool trace, Approve / Decline cards and a grounding badge on every answer |
+| **Insights** | Days used, cost per day, latency p50/p95, cache hit rate, recent runs; **Run evaluation** runs the 22 cases in about a second |
+| **Settings** | Calendars (URLs hidden), planning limits, model, the 13 tools and which need approval, sync, theme |
+
+Plus a Ctrl+K command palette (jump to a page or ask the assistant), Alt+1…8 shortcuts, light and dark themes, toasts and a mobile layout.
+
+- **Buttons use the same tools as the agent.** Every button calls a write tool through `/api/actions/{tool}`: first `/preview`, which runs the tool's validation and returns the proposal text I confirm, then the action itself. Dragging a block onto a lecture or past its deadline is refused by the same check that refuses the agent. One code path, one set of tests.
+- **Data without the model.** Every page reads through the deterministic tools: free, instant, and the same data the agent sees.
 - **Live trace.** Each question runs the agent in a background thread; the page polls for events and shows every tool call, refusal and grounding correction as it happens. Polling is simpler than WebSockets and plenty for one user on localhost.
 - **Approval in the browser.** When a write tool returns a proposal, the agent thread blocks until I click Approve or Decline. No answer within 10 minutes means declined. Nothing is written while it waits; a test checks this over HTTP.
 - **Local-only by design.** It binds to `127.0.0.1`, accepts only localhost `Host` headers (blocks DNS rebinding), and every POST needs an `X-Study-Agent` header. Browsers can't add that header to a cross-site request without a CORS preflight, which the app never allows, so another website can't start runs (spending my API budget) or approve changes through my browser. Calendar titles and answers are inserted as text or HTML-escaped, never as raw HTML.
 
-The screenshot above is a real `study web --demo` page in headless Edge; in demo mode the model turns are scripted, so the approval card shows the scripted decision instead of buttons.
+The screenshots above are real `study web --demo` pages captured in headless Edge. In demo mode, button changes are saved for the session (so the numbers and risks update for real), while assistant answers are scripted replays, so its approval cards show the scripted decision instead of buttons.
 
 ## Why I built it
 
@@ -72,7 +87,7 @@ At Aalto my deadlines are spread across MyCourses, course pages and my own notes
 
 [`agent.py`](src/study_agent/agent.py) is a plain `for` loop, about 100 lines, with no agent framework:
 
-1. Send the question, the 12 tool schemas and the conversation to Claude.
+1. Send the question, the 13 tool schemas and the conversation to Claude.
 2. If Claude answers with `tool_use` blocks, my code runs each tool and sends **all** results back in one message. Errors go back as `is_error` results, so the model can correct a bad argument (e.g. a block that overlaps a lecture).
 3. Repeat until Claude gives a final answer, with a **hard limit of 8 model calls** per question, so a confused model cannot loop and spend money.
 4. Run the grounding checker on the answer (below). If it finds an unsupported claim, send one correction message and loop once more.
@@ -104,7 +119,7 @@ Every write tool returns a **proposal** instead of writing. The loop shows it, a
   Apply this change? [y/n] (n):
 ```
 
-The gate is enforced by **code structure**, not by asking the model nicely: write handlers have no path to the database except through the approved proposal. Without an interactive terminal (cron, CI) every change is declined. Tests check that a declined write leaves every table unchanged, for each of the 6 write tools. A declined change goes back to the model as "declined, do not retry".
+The gate is enforced by **code structure**, not by asking the model nicely: write handlers have no path to the database except through the approved proposal. Without an interactive terminal (cron, CI) every change is declined. Tests check that a declined write leaves every table unchanged, for each of the 7 write tools. A declined change goes back to the model as "declined, do not retry".
 
 ## How grounding works and what the checker catches
 
@@ -170,7 +185,7 @@ Every number here comes from a command in this table. Numbers I have not measure
 
 | What | Result | Command |
 |---|---|---|
-| Tests | **133 passed**, 89% branch coverage | `uv run pytest --cov` |
+| Tests | **142 passed**, 89% branch coverage | `uv run pytest --cov` |
 | Eval, replay mode | **22/22** cases; 0 ungrounded claims after the check; the checker caught the 2 planted claims in `hallucination-trap` | `uv run study eval` |
 | Eval, live mode | *pending* | `uv run study eval --live --record` |
 | `study today` latency p50 / p95 | *pending, needs daily use* | `uv run study stats` |
@@ -209,7 +224,7 @@ On Windows machines where an Application Control policy blocks the generated `st
 ```
 src/study_agent/
   agent.py        the loop, system prompt, correction round
-  tools.py        12 tool schemas + handlers; write tools return proposals
+  tools.py        13 tool schemas + handlers; write tools return proposals
   planner.py      EDF risk check, free-slot finder, block suggestions
   grounding.py    the grounding checker
   llm.py          live Claude client (caching, fallback, errors) and replay client
@@ -218,7 +233,7 @@ src/study_agent/
   evals/          22 cases + runner;  demo/  fictional semester
   web/            FastAPI backend + static HTML/CSS/JS dashboard and chat
   cli.py, render.py, stats.py, runlog.py
-tests/            133 tests: parsing, DST, planner, approval gate, checker, loop, live request shape, web
+tests/            142 tests: parsing, DST, planner, approval gate, checker, loop, live request shape, web
 ```
 
 ## What I'd do next
