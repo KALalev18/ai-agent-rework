@@ -154,7 +154,7 @@ Every number here comes from a command in this table. Numbers I have not measure
 
 | What | Result | Command |
 |---|---|---|
-| Tests | **123 passed**, 89% branch coverage | `uv run pytest --cov` |
+| Tests | **125 passed**, 89% branch coverage | `uv run pytest --cov` |
 | Eval, replay mode | **22/22** cases; 0 ungrounded claims after the check; the checker caught the 2 planted claims in `hallucination-trap` | `uv run study eval` |
 | Eval, live mode | *pending* | `uv run study eval --live --record` |
 | `study today` latency p50 / p95 | *pending, needs daily use* | `uv run study stats` |
@@ -200,7 +200,7 @@ src/study_agent/
   store.py        SQLite: tasks, progress, blocks, run log
   evals/          22 cases + runner;  demo/  fictional semester
   cli.py, render.py, stats.py
-tests/            123 tests: parsing, DST, planner, approval gate, checker, loop, live request shape
+tests/            125 tests: parsing, DST, planner, approval gate, checker, loop, live request shape
 ```
 
 ## What I'd do next
