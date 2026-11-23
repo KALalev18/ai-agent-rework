@@ -117,7 +117,10 @@ class AnthropicModel:
     mode = "live"
 
     def __init__(self, record_to: list[JSON] | None = None) -> None:
-        self.client = anthropic.Anthropic()
+        try:
+            self.client = anthropic.Anthropic()
+        except anthropic.AnthropicError as exc:  # e.g. a broken `ant auth` profile
+            raise LLMError(f"could not load Claude API credentials: {exc}") from None
         self.record_to = record_to
 
     def create(
@@ -161,6 +164,14 @@ class AnthropicModel:
             raise LLMError(f"Claude API error {exc.status_code}: {exc.message}") from None
         except anthropic.AnthropicError as exc:
             raise LLMError(f"Claude API client error: {exc}") from None
+        except TypeError as exc:
+            # The SDK raises TypeError when it finds no credentials at all.
+            if "authentication" not in str(exc).lower():
+                raise
+            raise LLMError(
+                "no Claude API credentials: set ANTHROPIC_API_KEY in .env"
+                " (or try `study demo`, which needs no key)"
+            ) from None
         data = message.to_dict(mode="json")
         if self.record_to is not None:
             self.record_to.append(

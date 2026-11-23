@@ -89,6 +89,28 @@ def test_models_without_fallback_support_do_not_send_it() -> None:
     assert "fallbacks" not in seen["body"]
 
 
+def test_missing_credentials_give_a_clear_message(monkeypatch: pytest.MonkeyPatch) -> None:
+    model = model_with(lambda request: httpx2.Response(200, json=RESPONSE))
+
+    def no_credentials(**kwargs: Any) -> None:
+        # What the SDK raises when it finds no API key, token or profile at all.
+        raise TypeError('"Could not resolve authentication method. Expected one of api_key"')
+
+    monkeypatch.setattr(model.client.beta.messages, "create", no_credentials)
+    with pytest.raises(LLMError, match="ANTHROPIC_API_KEY"):
+        call(model)
+
+
+def test_broken_credential_profile_gives_a_clear_message(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    for name in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_PROFILE"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("ANTHROPIC_CONFIG_DIR", str(tmp_path / "empty"))
+    with pytest.raises(LLMError, match="credentials"):
+        AnthropicModel()
+
+
 @pytest.mark.parametrize(
     ("status", "message"),
     [(401, "API key"), (429, "rate limited"), (500, "Claude API error 500")],
