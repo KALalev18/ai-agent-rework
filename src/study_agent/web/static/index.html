@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Study Agent</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">◆</span>
+      <h1>Study Agent</h1>
+      <span id="mode" class="pill"></span>
+    </div>
+    <div class="meta">
+      <span id="now"></span>
+      <button id="refresh" class="ghost" title="Reload calendars and plan">Refresh</button>
+    </div>
+  </header>
+
+  <div id="warnings"></div>
+
+  <main class="layout">
+    <section class="column dashboard" aria-label="Dashboard">
+      <article class="card">
+        <h2>At risk</h2>
+        <p class="hint">Earliest-deadline-first check: work needed vs. free study time.</p>
+        <ul id="risks" class="risk-list"></ul>
+      </article>
+
+      <article class="card">
+        <h2 id="today-title">Today</h2>
+        <p class="hint">Lectures, saved study blocks and suggested blocks in free time.</p>
+        <ol id="timeline" class="timeline"></ol>
+      </article>
+
+      <article class="card">
+        <h2>Deadlines, next 14 days</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Due</th><th>Course</th><th>Title</th><th>Left</th><th>Risk</th></tr></thead>
+            <tbody id="deadlines"></tbody>
+          </table>
+        </div>
+      </article>
+    </section>
+
+    <section class="column chat card" aria-label="Agent">
+      <div class="chat-head">
+        <h2>Ask the agent</h2>
+        <button id="new-chat" class="ghost">New chat</button>
+      </div>
+      <div id="chips" class="chips"></div>
+      <div id="log" class="log" aria-live="polite">
+        <p class="empty">Ask about deadlines, your plan or what you finished. Changes always need your approval.</p>
+      </div>
+      <form id="ask" class="ask">
+        <input id="question" autocomplete="off" placeholder="e.g. What's due this week?" maxlength="2000">
+        <button id="send" type="submit">Send</button>
+      </form>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
