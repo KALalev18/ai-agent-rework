@@ -26,7 +26,7 @@ from study_agent.planner import (
     suggest_blocks,
 )
 from study_agent.sources.loader import Calendars, SourceError
-from study_agent.store import Store, block_ref, parse_ref
+from study_agent.store import Block, Store, block_ref, parse_ref
 from study_agent.timeutil import (
     Clock,
     day_bounds,
@@ -174,7 +174,7 @@ ITEM_PROP = {
 # --- serialisation ------------------------------------------------------------------------
 
 
-def _item_dict(item: WorkItem, risk: Risk | None) -> JSON:
+def item_dict(item: WorkItem, risk: Risk | None) -> JSON:
     data: JSON = {
         "id": item.id,
         "kind": item.kind,
@@ -216,7 +216,7 @@ def _risk_summary(items: list[WorkItem], risks: dict[str, Risk]) -> list[JSON]:
     flagged.sort(
         key=lambda i: (RISKY_ORDER.index(risks[i.id].status), i.due.timestamp() if i.due else 0)
     )
-    return [_item_dict(i, risks[i.id]) for i in flagged]
+    return [item_dict(i, risks[i.id]) for i in flagged]
 
 
 # --- read-only tools ----------------------------------------------------------------------
@@ -238,7 +238,7 @@ def get_deadlines(ctx: ToolContext, args: JSON) -> JSON:
         if not lo <= deadline.due < hi or (course and deadline.course != course):
             continue
         if deadline.id in open_ids:
-            results.append(_item_dict(by_id[deadline.id], risks.get(deadline.id)))
+            results.append(item_dict(by_id[deadline.id], risks.get(deadline.id)))
         elif include_done:
             state = states.get(deadline.id)
             done = {**deadline.to_dict(), "done": True}
@@ -274,7 +274,7 @@ def list_tasks(ctx: ToolContext, args: JSON) -> JSON:
         if course and (task.course or "").upper() != course:
             continue
         if task.ref in by_id:
-            tasks.append(_item_dict(by_id[task.ref], risks.get(task.ref)))
+            tasks.append(item_dict(by_id[task.ref], risks.get(task.ref)))
         else:
             tasks.append({"id": task.ref, "title": task.title, "course": task.course, "done": True})
     return {"tasks": tasks, "count": len(tasks)}
@@ -523,8 +523,8 @@ def schedule_blocks(ctx: ToolContext, args: JSON) -> Proposal:
     raw = args.get("blocks")
     if not isinstance(raw, list) or not raw:
         raise ToolError("'blocks' must be a non-empty list")
-    if len(raw) > 20:
-        raise ToolError("at most 20 blocks at a time")
+    if len(raw) > 50:
+        raise ToolError("at most 50 blocks at a time")
     planned: list[_NewBlock] = []
     for entry in raw:
         if not isinstance(entry, dict):
@@ -559,12 +559,34 @@ def schedule_blocks(ctx: ToolContext, args: JSON) -> Proposal:
     return Proposal(f"Save {len(planned)} study block(s)", lines, apply)
 
 
-def move_study_block(ctx: ToolContext, args: JSON) -> Proposal:
+def _saved_block(ctx: ToolContext, args: JSON) -> Block:
     ref = _req_str(args, "block_id")
     block_id = parse_ref(ref, "B")
     block = ctx.store.block(block_id) if block_id is not None else None
     if block is None:
         raise ToolError(f"no saved block {ref}; use plan_day or plan_week to see block ids")
+    return block
+
+
+def delete_study_block(ctx: ToolContext, args: JSON) -> Proposal:
+    block = _saved_block(ctx, args)
+
+    def apply() -> JSON:
+        ctx.store.delete_block(block.id)
+        return {"status": "applied", "deleted": block.ref}
+
+    return Proposal(
+        "Remove study block",
+        [
+            f"{block.ref} {block.course}: {block.title}",
+            f"{fmt_moment(block.start)}-{block.end:%H:%M}",
+        ],
+        apply,
+    )
+
+
+def move_study_block(ctx: ToolContext, args: JSON) -> Proposal:
+    block = _saved_block(ctx, args)
     new_start = _moment(_req_str(args, "new_start"), "new_start")
     minutes = _opt_int(args, "minutes", 15, 480) or minutes_between(block.start, block.end)
     new_end = new_start + timedelta(minutes=minutes)
@@ -721,6 +743,14 @@ TOOLS: tuple[Tool, ...] = (
         },
         move_study_block,
         required=("block_id", "new_start"),
+        writes=True,
+    ),
+    Tool(
+        "delete_study_block",
+        "Propose removing a saved study block (B-n) from my plan. I must approve it.",
+        {"block_id": {"type": "string", "description": "Saved block id, e.g. B-3"}},
+        delete_study_block,
+        required=("block_id",),
         writes=True,
     ),
 )

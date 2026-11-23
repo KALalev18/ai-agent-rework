@@ -11,7 +11,7 @@
 - id: morning-brief
   question: Give me my morning brief for today.
   expected_tools: [plan_day, get_deadlines]
-  forbidden_tools: &writes [add_task, complete_item, log_progress, set_estimate, schedule_blocks, move_study_block]
+  forbidden_tools: &writes [add_task, complete_item, log_progress, set_estimate, schedule_blocks, move_study_block, delete_study_block]
   expected_facts: [Assignment 3, Project milestone 2, Exercise round 7, "10:15"]
   forbidden_facts: [Assignment 2]
   script:

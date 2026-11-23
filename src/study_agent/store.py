@@ -289,16 +289,20 @@ class Store:
             "SELECT * FROM progress WHERE logged_at >= ? AND logged_at < ? ORDER BY logged_at",
             (_utc(start), _utc(end)),
         ).fetchall()
-        result = []
-        for row in rows:
-            logged = _local(row["logged_at"])
-            assert logged is not None
-            result.append(
-                Progress(
-                    row["id"], logged, row["text"], row["item_id"], row["course"], row["minutes"]
-                )
-            )
-        return result
+        return [self._progress(row) for row in rows]
+
+    def _progress(self, row: sqlite3.Row) -> Progress:
+        logged = _local(row["logged_at"])
+        assert logged is not None
+        return Progress(
+            row["id"], logged, row["text"], row["item_id"], row["course"], row["minutes"]
+        )
+
+    def progress_for(self, item_id: str) -> list[Progress]:
+        rows = self.conn.execute(
+            "SELECT * FROM progress WHERE item_id = ? ORDER BY logged_at", (item_id,)
+        ).fetchall()
+        return [self._progress(row) for row in rows]
 
     def logged_minutes(self) -> dict[str, int]:
         rows = self.conn.execute(
@@ -335,6 +339,16 @@ class Store:
     def block(self, block_id: int) -> Block | None:
         row = self.conn.execute("SELECT * FROM blocks WHERE id = ?", (block_id,)).fetchone()
         return self._block(row) if row else None
+
+    def blocks_for(self, item_id: str) -> list[Block]:
+        rows = self.conn.execute(
+            "SELECT * FROM blocks WHERE item_id = ? ORDER BY start", (item_id,)
+        ).fetchall()
+        return [self._block(row) for row in rows]
+
+    def delete_block(self, block_id: int) -> None:
+        with self.transaction() as conn:
+            conn.execute("DELETE FROM blocks WHERE id = ?", (block_id,))
 
     def move_block(self, block_id: int, start: datetime, end: datetime) -> None:
         with self.transaction() as conn:

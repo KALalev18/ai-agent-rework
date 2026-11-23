@@ -29,6 +29,7 @@ WRITE_CALLS = [
     ("set_estimate", {"item_id": LAB4, "estimate_min": 600}),
     ("schedule_blocks", {"blocks": [{"item_id": A3, "start": "2026-11-23T09:00", "minutes": 60}]}),
     ("move_study_block", {"block_id": "B-2", "new_start": "2026-11-29T13:00"}),
+    ("delete_study_block", {"block_id": "B-1"}),
 ]
 
 
