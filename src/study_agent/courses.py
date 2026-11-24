@@ -69,6 +69,7 @@ def deadlines(store: Store) -> list[Deadline]:
             source=SOURCE,
             category=d.kind,
             course_name=names.get(d.course, ""),
+            weight_pct=d.weight_pct,
         )
         for d in store.course_deadlines()
     ]

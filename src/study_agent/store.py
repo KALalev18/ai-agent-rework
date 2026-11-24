@@ -90,7 +90,8 @@ CREATE TABLE IF NOT EXISTS course_deadlines (
     kind TEXT NOT NULL,
     title TEXT NOT NULL,
     due TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    weight_pct INTEGER
 );
 CREATE TABLE IF NOT EXISTS course_sessions (
     id INTEGER PRIMARY KEY,
@@ -192,6 +193,7 @@ class CourseDeadline:
     kind: str
     title: str
     due: datetime
+    weight_pct: int | None = None
 
     @property
     def ref(self) -> str:
@@ -238,6 +240,14 @@ class Store:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Add columns introduced after a database was created (SQLite has no IF NOT EXISTS)."""
+        columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(course_deadlines)")}
+        if "weight_pct" not in columns:
+            with self.conn:
+                self.conn.execute("ALTER TABLE course_deadlines ADD COLUMN weight_pct INTEGER")
 
     def close(self) -> None:
         self.conn.close()
@@ -511,23 +521,35 @@ class Store:
             conn.execute("DELETE FROM blocks WHERE item_id = ?", (item_id,))
 
     def add_course_deadline(
-        self, course: str, kind: str, title: str, due: datetime, now: datetime
+        self,
+        course: str,
+        kind: str,
+        title: str,
+        due: datetime,
+        now: datetime,
+        weight_pct: int | None = None,
     ) -> int:
         with self.transaction() as conn:
             cursor = conn.execute(
-                "INSERT INTO course_deadlines (course, kind, title, due, created_at)"
-                " VALUES (?, ?, ?, ?, ?)",
-                (course, kind, title, _utc(due), _utc(now)),
+                "INSERT INTO course_deadlines (course, kind, title, due, created_at, weight_pct)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (course, kind, title, _utc(due), _utc(now), weight_pct),
             )
         return int(cursor.lastrowid or 0)
 
     def update_course_deadline(
-        self, deadline_id: int, kind: str, title: str, due: datetime
+        self,
+        deadline_id: int,
+        kind: str,
+        title: str,
+        due: datetime,
+        weight_pct: int | None = None,
     ) -> None:
         with self.transaction() as conn:
             conn.execute(
-                "UPDATE course_deadlines SET kind = ?, title = ?, due = ? WHERE id = ?",
-                (kind, title, _utc(due), deadline_id),
+                "UPDATE course_deadlines SET kind = ?, title = ?, due = ?, weight_pct = ?"
+                " WHERE id = ?",
+                (kind, title, _utc(due), weight_pct, deadline_id),
             )
 
     def delete_course_deadline(self, deadline_id: int) -> None:
@@ -541,7 +563,11 @@ class Store:
         for row in rows:
             due = _local(row["due"])
             assert due is not None
-            result.append(CourseDeadline(row["id"], row["course"], row["kind"], row["title"], due))
+            result.append(
+                CourseDeadline(
+                    row["id"], row["course"], row["kind"], row["title"], due, row["weight_pct"]
+                )
+            )
         return result
 
     def add_session(

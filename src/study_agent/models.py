@@ -54,9 +54,10 @@ class Deadline:
     source: str
     category: str = "deadline"  # assignment, project, exam, quiz, lab, presentation, ...
     course_name: str = ""
+    weight_pct: int | None = None  # share of the course grade, when I know it
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        data: dict[str, object] = {
             "id": self.id,
             "course": self.course,
             "title": self.title,
@@ -65,6 +66,9 @@ class Deadline:
             "due_local": fmt_moment(self.due),
             "source": self.source,
         }
+        if self.weight_pct is not None:
+            data["grade_weight_pct"] = self.weight_pct
+        return data
 
 
 @dataclass(frozen=True)

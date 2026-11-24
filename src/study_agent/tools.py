@@ -202,6 +202,8 @@ def item_dict(item: WorkItem, risk: Risk | None) -> JSON:
     if item.due:
         data["due"] = iso(item.due)
         data["due_local"] = fmt_moment(item.due)
+    if item.weight_pct is not None:
+        data["grade_weight_pct"] = item.weight_pct
     if risk:
         data["risk"] = risk.status
         data["risk_reason"] = risk.reason
@@ -440,15 +442,17 @@ def add_deadline(ctx: ToolContext, args: JSON) -> Proposal:
     except courses.CourseInputError as exc:
         raise ToolError(str(exc)) from None
     estimate = _opt_int(args, "estimate_min", 5, 6000)
+    weight = _opt_int(args, "weight_pct", 0, 100)
     known = ctx.store.course(course)
     lines = [f"Course: {course}" + (f" {known.name}" if known else " (new course)")]
     lines += [f"{kind.capitalize()}: {title}", f"Due: {fmt_moment(due)}"]
     lines += [f"Estimate: {estimate} min"] if estimate else []
+    lines += [f"Grade weight: {weight} %"] if weight is not None else []
 
     def apply() -> JSON:
         if ctx.store.course(course) is None:
             ctx.store.add_course(course, course, ctx.now())
-        new_id = ctx.store.add_course_deadline(course, kind, title, due, ctx.now())
+        new_id = ctx.store.add_course_deadline(course, kind, title, due, ctx.now(), weight)
         ref = f"M-{new_id}"
         if estimate:
             ctx.store.set_deadline_estimate(ref, estimate)
@@ -730,6 +734,7 @@ TOOLS: tuple[Tool, ...] = (
                 "description": "ISO date (means 23:59) or datetime, Helsinki",
             },
             "estimate_min": {"type": "integer", "description": "Estimated effort in minutes"},
+            "weight_pct": {"type": "integer", "description": "Share of the course grade, 0-100"},
         },
         add_deadline,
         required=("course", "title", "due"),
