@@ -11,7 +11,7 @@
 - id: morning-brief
   question: Give me my morning brief for today.
   expected_tools: [plan_day, get_deadlines]
-  forbidden_tools: &writes [add_task, complete_item, log_progress, set_estimate, schedule_blocks, move_study_block, delete_study_block]
+  forbidden_tools: &writes [add_task, add_deadline, complete_item, log_progress, set_estimate, schedule_blocks, move_study_block, delete_study_block]
   expected_facts: [Assignment 3, Project milestone 2, Exercise round 7, "10:15"]
   forbidden_facts: [Assignment 2]
   script:
@@ -284,6 +284,20 @@
     - tools: [{name: list_tasks, input: {}}]
     - tools: [{name: complete_item, input: {item_id: T-1}}]
     - text: "Done: T-1 Review lecture notes, weeks 10-11 (CS-E9001)."
+
+- id: add-exam
+  question: Add my CS-E9001 final exam, it's on 14 December at 9:00.
+  expected_tools: [add_deadline]
+  approve: [true]
+  expected_facts: ["14 Dec", "09:00"]
+  db:
+    - {sql: "SELECT COUNT(*) FROM course_deadlines WHERE course = 'CS-E9001' AND kind = 'exam'", equals: 1}
+    - {sql: "SELECT due FROM course_deadlines WHERE id = 1", equals: "2026-12-14T07:00:00+00:00"}
+  script:
+    - tools:
+        - name: add_deadline
+          input: {course: CS-E9001, kind: exam, title: Final exam, due: "2026-12-14T09:00"}
+    - text: "Added: CS-E9001 Final exam, Mon 14 Dec 09:00 (my courses). It now counts in your risk check."
 
 - id: out-of-scope
   question: What's the weather in Espoo tomorrow?

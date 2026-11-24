@@ -15,7 +15,9 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any
 
+from study_agent import courses
 from study_agent.config import Settings
+from study_agent.models import Deadline, Event
 from study_agent.planner import (
     RISKY_ORDER,
     Risk,
@@ -67,9 +69,19 @@ class ToolContext:
     def today(self) -> date:
         return self.now().date()
 
+    def deadlines(self) -> list[Deadline]:
+        """Imported calendar deadlines plus the deadlines I typed in for my courses."""
+        merged = self.calendars.deadlines() + courses.deadlines(self.store)
+        return sorted(merged, key=lambda d: (d.due, d.course, d.title))
+
+    def events(self, start: date, end: date) -> list[Event]:
+        """Imported timetable events plus my courses' weekly classes."""
+        merged = self.calendars.events(start, end) + courses.events(self.store, start, end)
+        return sorted(merged, key=lambda e: (e.start, e.course))
+
     def items(self) -> list[WorkItem]:
         return build_items(
-            self.calendars.deadlines(),
+            self.deadlines(),
             self.store.tasks(),
             self.store.deadline_states(),
             self.store.logged_minutes(),
@@ -78,7 +90,7 @@ class ToolContext:
     def risks(self, items: list[WorkItem]) -> dict[str, Risk]:
         dues = [i.due for i in items if i.due and i.due > self.now()]
         horizon = max(dues).date() if dues else self.today()
-        events = self.calendars.events(self.today(), horizon)
+        events = self.events(self.today(), horizon)
         return assess_risks(items, events, self.now(), self.settings)
 
 
@@ -180,6 +192,7 @@ def item_dict(item: WorkItem, risk: Risk | None) -> JSON:
         "kind": item.kind,
         "course": item.course,
         "title": item.title,
+        "category": item.category,
         "source": item.source,
         "estimate_min": item.estimate_min,
         "estimate_source": item.estimate_source,
@@ -234,7 +247,7 @@ def get_deadlines(ctx: ToolContext, args: JSON) -> JSON:
     states = ctx.store.deadline_states()
     by_id = {i.id: i for i in items}
     results: list[JSON] = []
-    for deadline in ctx.calendars.deadlines():
+    for deadline in ctx.deadlines():
         if not lo <= deadline.due < hi or (course and deadline.course != course):
             continue
         if deadline.id in open_ids:
@@ -257,9 +270,7 @@ def get_deadlines(ctx: ToolContext, args: JSON) -> JSON:
 def get_timetable(ctx: ToolContext, args: JSON) -> JSON:
     start, end = _range(ctx, args, 0)
     course = _course_filter(args)
-    events = [
-        e.to_dict() for e in ctx.calendars.events(start, end) if not course or e.course == course
-    ]
+    events = [e.to_dict() for e in ctx.events(start, end) if not course or e.course == course]
     return {"range": {"from": start.isoformat(), "to": end.isoformat()}, "events": events}
 
 
@@ -282,7 +293,7 @@ def list_tasks(ctx: ToolContext, args: JSON) -> JSON:
 
 def _day_plan(ctx: ToolContext, day: date, items: list[WorkItem]) -> JSON:
     lo, hi = day_bounds(day)
-    events = ctx.calendars.events(day, day)
+    events = ctx.events(day, day)
     saved = ctx.store.blocks_between(lo, hi)
     future_saved = ctx.store.blocks_between(ctx.now(), hi + timedelta(days=60))
     suggestions = suggest_blocks([day], items, events, future_saved, ctx.now(), ctx.settings)
@@ -320,7 +331,7 @@ def plan_week(ctx: ToolContext, args: JSON) -> JSON:
     start = _day(args, "start_date", ctx.today())
     items = ctx.items()
     days = [start + timedelta(days=n) for n in range(7)]
-    events = ctx.calendars.events(days[0], days[-1])
+    events = ctx.events(days[0], days[-1])
     lo, _ = day_bounds(days[0])
     saved = ctx.store.blocks_between(max(lo, ctx.now()), lo + timedelta(days=60))
     suggestions = suggest_blocks(days, items, events, saved, ctx.now(), ctx.settings)
@@ -420,6 +431,32 @@ def add_task(ctx: ToolContext, args: JSON) -> Proposal:
     return Proposal("Add task", lines, apply)
 
 
+def add_deadline(ctx: ToolContext, args: JSON) -> Proposal:
+    try:
+        course = courses.clean_code(_req_str(args, "course"))
+        kind = courses.clean_kind(_opt_str(args, "kind") or "assignment")
+        title = courses.clean_text(_req_str(args, "title"), "title")
+        due = courses.parse_due(_req_str(args, "due"))
+    except courses.CourseInputError as exc:
+        raise ToolError(str(exc)) from None
+    estimate = _opt_int(args, "estimate_min", 5, 6000)
+    known = ctx.store.course(course)
+    lines = [f"Course: {course}" + (f" {known.name}" if known else " (new course)")]
+    lines += [f"{kind.capitalize()}: {title}", f"Due: {fmt_moment(due)}"]
+    lines += [f"Estimate: {estimate} min"] if estimate else []
+
+    def apply() -> JSON:
+        if ctx.store.course(course) is None:
+            ctx.store.add_course(course, course, ctx.now())
+        new_id = ctx.store.add_course_deadline(course, kind, title, due, ctx.now())
+        ref = f"M-{new_id}"
+        if estimate:
+            ctx.store.set_deadline_estimate(ref, estimate)
+        return {"status": "applied", "deadline_id": ref, "title": title}
+
+    return Proposal(f"Add {kind}", lines, apply)
+
+
 def complete_item(ctx: ToolContext, args: JSON) -> Proposal:
     item = _find_item(ctx, _req_str(args, "item_id"))
 
@@ -501,7 +538,7 @@ def _check_free(
             f"a block ending {fmt_moment(end)} is after {item.course} {item.title} is due"
             f" ({fmt_moment(item.due)}), so it would not help"
         )
-    for event in ctx.calendars.events(start.date(), end.date()):
+    for event in ctx.events(start.date(), end.date()):
         if event.start < end and start < event.end:
             raise ToolError(
                 f"{fmt_moment(start)}-{end:%H:%M} overlaps {event.course} {event.kind}"
@@ -678,6 +715,24 @@ TOOLS: tuple[Tool, ...] = (
         },
         add_task,
         required=("title",),
+        writes=True,
+    ),
+    Tool(
+        "add_deadline",
+        "Propose adding a deadline I tell you about (assignment, project, exam, quiz, lab,"
+        " presentation, other) to one of my courses. I must approve it.",
+        {
+            "course": {"type": "string", "description": "Course code, e.g. CS-E4780"},
+            "kind": {"type": "string", "enum": list(courses.KINDS)},
+            "title": {"type": "string"},
+            "due": {
+                "type": "string",
+                "description": "ISO date (means 23:59) or datetime, Helsinki",
+            },
+            "estimate_min": {"type": "integer", "description": "Estimated effort in minutes"},
+        },
+        add_deadline,
+        required=("course", "title", "due"),
         writes=True,
     ),
     Tool(

@@ -12,7 +12,7 @@ from study_agent.tools import TOOLS, Proposal, ToolContext, execute, tool_defini
 
 
 def snapshot(store: Store) -> dict[str, list[tuple[object, ...]]]:
-    tables = ("tasks", "deadline_state", "progress", "blocks")
+    tables = ("tasks", "deadline_state", "progress", "blocks", "courses", "course_deadlines")
     return {
         t: [tuple(r) for r in store.conn.execute(f"SELECT * FROM {t} ORDER BY 1")] for t in tables
     }
@@ -24,6 +24,10 @@ def never(_: Proposal) -> bool:
 
 WRITE_CALLS = [
     ("add_task", {"title": "Write intro", "course": "CS-E9001", "estimate_min": 60}),
+    (
+        "add_deadline",
+        {"course": "CS-E9001", "kind": "exam", "title": "Exam", "due": "2026-12-14T09:00"},
+    ),
     ("complete_item", {"item_id": A3}),
     ("log_progress", {"text": "did stuff", "item_id": A3, "minutes": 30, "mark_done": True}),
     ("set_estimate", {"item_id": LAB4, "estimate_min": 600}),
