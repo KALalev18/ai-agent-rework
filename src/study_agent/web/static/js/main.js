@@ -1,9 +1,11 @@
 // App shell: hash router, sidebar, command palette (Ctrl+K), theme, and refresh-after-change.
 
 import { api } from "./api.js";
-import { el, icon, modal, skeleton, toast } from "./ui.js";
+import { el, icon, modal, registerCourses, skeleton, toast } from "./ui.js";
 import { applyTheme, getTheme, setTheme } from "./theme.js";
 import * as today from "./pages/today.js";
+import * as calendar from "./pages/calendar.js";
+import * as courses from "./pages/courses.js";
 import * as planner from "./pages/planner.js";
 import * as deadlines from "./pages/deadlines.js";
 import * as tasks from "./pages/tasks.js";
@@ -14,13 +16,15 @@ import * as settings from "./pages/settings.js";
 
 const PAGES = [
   { id: "today", label: "Today", icon: "today", module: today, key: "1" },
-  { id: "planner", label: "Planner", icon: "planner", module: planner, key: "2" },
-  { id: "deadlines", label: "Deadlines", icon: "deadlines", module: deadlines, key: "3" },
-  { id: "tasks", label: "Tasks", icon: "tasks", module: tasks, key: "4" },
-  { id: "progress", label: "Progress", icon: "progress", module: progress, key: "5" },
-  { id: "assistant", label: "Assistant", icon: "assistant", module: assistant, key: "6" },
-  { id: "insights", label: "Insights", icon: "insights", module: insights, key: "7" },
-  { id: "settings", label: "Settings", icon: "settings", module: settings, key: "8" },
+  { id: "calendar", label: "Calendar", icon: "calendar", module: calendar, key: "2" },
+  { id: "planner", label: "Planner", icon: "planner", module: planner, key: "3" },
+  { id: "deadlines", label: "Deadlines", icon: "deadlines", module: deadlines, key: "4" },
+  { id: "tasks", label: "Tasks", icon: "tasks", module: tasks, key: "5" },
+  { id: "progress", label: "Progress", icon: "progress", module: progress, key: "6" },
+  { id: "courses", label: "Courses", icon: "book", module: courses, key: "7" },
+  { id: "assistant", label: "Assistant", icon: "assistant", module: assistant, key: "8" },
+  { id: "insights", label: "Insights", icon: "insights", module: insights, key: "9" },
+  { id: "settings", label: "Settings", icon: "settings", module: settings, key: "0" },
 ];
 
 let overview = null;
@@ -36,6 +40,7 @@ export function navigate(page, params = {}) {
 async function refreshOverview() {
   try {
     overview = await api.get("/api/overview");
+    registerCourses(overview.courses || []);
   } catch (error) {
     overview = overview || { mode: "live", model: "", now: "", demo_questions: [], stats: {} };
     toast(`Could not load your calendars: ${error.message}`, "error");

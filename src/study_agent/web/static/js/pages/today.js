@@ -74,6 +74,28 @@ export async function render(view, { navigate }) {
     `${hours(s.planned_today_min)} of study planned today`,
   ].join(" · ");
 
+  if (data.setup && !data.setup.has_data) {
+    view.replaceChildren(
+      el("section", { class: "hero" },
+        el("div", {},
+          el("p", { class: "eyebrow" }, data.now),
+          el("h1", {}, `${greeting(data.now_iso)}. Let's set up your semester.`),
+          el("p", { class: "lead" }, "Add your courses with their assignments, projects and exams. Study Agent then plans your days around your classes and warns you before a deadline slips."),
+        ),
+        el("div", { class: "row" },
+          el("button", { class: "primary large", onclick: () => navigate("courses") }, icon("plus"), "Add your courses"),
+          el("button", { class: "ghost large", onclick: () => navigate("settings") }, "Import a calendar instead"),
+        ),
+      ),
+      el("section", { class: "stats three" },
+        stat("1. Courses", "Add", "code and name of each course"),
+        stat("2. Deadlines", "Date + effort", "assignments, projects, exams"),
+        stat("3. Classes", "Weekly", "lectures and exercise sessions"),
+      ),
+    );
+    return;
+  }
+
   view.replaceChildren(
     el("section", { class: "hero" },
       el("div", {},

@@ -23,6 +23,8 @@ export function el(tag, attrs = {}, ...children) {
 const ICONS = {
   today: "M3 12l9-9 9 9M5 10v10h14V10",
   planner: "M4 5h16v15H4zM4 10h16M9 3v4M15 3v4",
+  calendar: "M4 5h16v15H4zM4 10h16M9 3v4M15 3v4M8 14h2M14 14h2M8 17h2M14 17h2",
+  book: "M4 19V5a2 2 0 012-2h13v16H6a2 2 0 00-2 2zM4 19a2 2 0 012-2h13M9 7h6",
   deadlines: "M12 7v5l3 3M12 21a9 9 0 110-18 9 9 0 010 18z",
   tasks: "M9 11l3 3 8-8M20 12v7a2 2 0 01-2 2H6a2 2 0 01-2-2V5a2 2 0 012-2h9",
   progress: "M4 20V10M10 20V4M16 20v-7M22 20H2",
@@ -76,11 +78,21 @@ export function courseTag(code) {
   return el("span", { class: "course", "data-course": code }, code);
 }
 
-// Deterministic colour per course, so a course looks the same on every page.
+// Colour per course. Courses get distinct palette hues in alphabetical order (registered once
+// from the overview), so colours never collide for up to 12 courses and match on every page.
+const PALETTE = [220, 150, 275, 190, 35, 320, 95, 250, 170, 300, 15, 350]; // red last: it means "exam" / "at risk"
+const assigned = new Map();
+
+export function registerCourses(codes) {
+  assigned.clear();
+  [...new Set(codes)].sort().forEach((code, i) => assigned.set(code, PALETTE[i % PALETTE.length]));
+}
+
 export function courseHue(code) {
+  if (assigned.has(code)) return assigned.get(code);
   let hash = 0;
-  for (const ch of code || "") hash = (hash * 31 + ch.charCodeAt(0)) % 360;
-  return hash;
+  for (const ch of code || "") hash = (hash * 31 + ch.charCodeAt(0)) % 997;
+  return PALETTE[hash % PALETTE.length];
 }
 
 export function empty(text, iconName = "sparkle") {

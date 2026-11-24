@@ -418,3 +418,71 @@ tr:hover .row-actions .actions, .row-actions .actions:focus-within { opacity: 1;
   .chat-card { height: calc(100vh - 200px); }
   .row-actions .actions { opacity: 1; }
 }
+
+/* courses */
+.course-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 520px), 1fr)); gap: 22px; align-items: start; }
+.course-card { display: grid; gap: 16px; border-top: 4px solid hsl(var(--hue) 65% 55%); }
+.course-head { display: flex; align-items: flex-start; gap: 10px; }
+.course-head h2 { font-size: 17px; }
+.course-dot { width: 12px; height: 12px; margin-top: 6px; border-radius: 50%; background: hsl(var(--hue) 65% 55%); flex: none; }
+.row.tight { gap: 8px; align-items: center; flex-wrap: wrap; }
+.course-section { display: grid; gap: 8px; }
+.course-section h3 { margin: 0; }
+.deadline-row { padding: 7px 8px; }
+.deadline-row.done .grow { text-decoration: line-through; color: var(--muted); }
+.deadline-row .when { min-width: 0; }
+.kind-pill { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 2px 8px; border-radius: 6px; background: var(--surface-2); color: var(--muted); white-space: nowrap; }
+.kind-pill.exam { background: var(--danger-soft); color: var(--danger); }
+.kind-pill.project { background: var(--accent-soft); color: var(--accent); }
+.kind-pill.quiz, .kind-pill.presentation { background: var(--warn-soft); color: var(--warn); }
+.onboarding { display: grid; gap: 14px; justify-items: start; padding: 28px; }
+.onboarding.compact { padding: 18px 20px; grid-auto-flow: column; align-items: center; justify-content: space-between; }
+.steps { margin: 0; padding-left: 22px; display: grid; gap: 8px; }
+
+/* month calendar */
+.month-card { overflow-x: auto; }
+.cal-head, .cal-grid { display: grid; grid-template-columns: repeat(7, minmax(120px, 1fr)); min-width: 860px; }
+.cal-head { background: var(--surface-2); border-bottom: 1px solid var(--line); }
+.cal-head div { padding: 10px 12px; font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+.cal-cell {
+  min-height: 150px; padding: 8px; display: flex; flex-direction: column; gap: 6px; cursor: pointer; outline: none;
+  border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); transition: background 0.12s;
+}
+.cal-cell:nth-child(7n) { border-right: 0; }
+.cal-cell:hover, .cal-cell:focus-visible { background: var(--surface-2); }
+.cal-cell.outside { background: color-mix(in srgb, var(--surface-2) 55%, transparent); }
+.cal-cell.outside .cal-num { color: var(--muted); opacity: 0.6; }
+.cal-cell.past .cal-chips { opacity: 0.7; }
+.cal-cell.has-exam { box-shadow: inset 0 3px 0 var(--danger); }
+.cal-date { display: flex; align-items: center; gap: 6px; }
+.cal-num { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 50%; font-weight: 650; font-size: 14px; }
+.cal-cell.today .cal-num { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: var(--on-accent); }
+.cal-month { font-size: 12px; font-weight: 650; color: var(--accent); text-transform: uppercase; }
+.cal-chips { display: grid; gap: 3px; min-width: 0; }
+.cal-chip {
+  display: flex; align-items: center; gap: 5px; min-width: 0; padding: 3px 6px; border-radius: 6px; font-size: 12px; line-height: 1.3;
+  border: 0; text-align: left; font-weight: 500; justify-content: flex-start; background: transparent; color: var(--text);
+}
+.cal-chip .chip-time { font-family: var(--mono); font-size: 11px; color: var(--muted); flex: none; }
+.cal-chip .chip-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cal-chip.deadline { background: hsl(var(--hue) 70% 50% / 0.14); box-shadow: inset 3px 0 0 hsl(var(--hue) 65% 50%); font-weight: 600; }
+.cal-chip.exam { background: var(--danger); color: #fff; font-weight: 700; }
+.cal-chip.exam .chip-time { color: rgba(255, 255, 255, 0.85); }
+.cal-chip.deadline.at_risk, .cal-chip.deadline.overdue { box-shadow: inset 3px 0 0 var(--danger), 0 0 0 1px var(--danger); }
+.cal-chip.done { opacity: 0.55; text-decoration: line-through; }
+.cal-chip.block { background: var(--accent-soft); color: var(--accent); }
+.cal-chip.class { color: var(--muted); padding: 1px 6px; }
+.cal-chip.class::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: hsl(var(--hue) 55% 55%); flex: none; }
+.cal-more { font-size: 12px; color: var(--muted); padding-left: 6px; }
+.segmented.multi button.active { color: var(--accent); }
+.course-toggles { display: flex; flex-wrap: wrap; gap: 6px; }
+.course-toggle { padding: 4px 10px; font-size: 12px; font-family: var(--mono); border-radius: 99px; gap: 6px; }
+.course-toggle i { width: 8px; height: 8px; border-radius: 50%; background: hsl(var(--hue) 65% 55%); }
+.course-toggle.off { opacity: 0.45; text-decoration: line-through; }
+.day-list { list-style: none; margin: 0 0 16px; padding: 0; display: grid; gap: 6px; }
+.day-list .cal-chip { width: 100%; font-size: 14px; padding: 8px 10px; }
+.day-detail { display: grid; gap: 8px; }
+@media (max-width: 760px) {
+  .cal-cell { min-height: 110px; }
+  .onboarding.compact { grid-auto-flow: row; }
+}
