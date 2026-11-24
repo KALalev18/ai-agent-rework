@@ -79,15 +79,28 @@ def test_risk_overdue_done_enough_and_no_due() -> None:
     assert risks["easy"].status == "ok"
 
 
-def test_suggestions_work_earliest_deadline_first_around_events() -> None:
+def test_each_assignment_is_one_block_placed_earliest_deadline_first() -> None:
     items = [item("later", t(27, 12), 120), item("sooner", t(24, 12), 120)]
     events = [lecture(t(23, 10), t(23, 12))]
     blocks = suggest_blocks([MON], items, events, [], NOW, S)
-    assert blocks[0].item_id == "sooner"
-    assert blocks[0].start == t(23, 9) and blocks[0].end == t(23, 10)
-    assert all(not (b.start < t(23, 12) and t(23, 10) < b.end) for b in blocks)
-    assert sum(b.minutes for b in blocks if b.item_id == "sooner") == 120
-    assert all(b.minutes <= S.max_block_min for b in blocks)
+    assert [(b.item_id, b.start, b.end) for b in blocks] == [
+        ("sooner", t(23, 12), t(23, 14)),  # 09:00-10:00 is too short for all 2 h, so 12:00
+        ("later", t(23, 14, 15), t(23, 16, 15)),  # one block each, 15 min break between
+    ]
+
+
+def test_big_items_spread_over_days_one_block_per_day() -> None:
+    days = [MON, MON + timedelta(days=1), MON + timedelta(days=2)]
+    blocks = suggest_blocks(days, [item("project", t(30, 12), 600)], [], [], NOW, S)
+    assert [b.start.date() for b in blocks] == days  # never two blocks of it on one day
+    assert all(b.minutes == S.max_block_min for b in blocks[:2])
+    assert sum(b.minutes for b in blocks) == 600
+
+
+def test_no_second_block_on_a_day_that_already_has_a_saved_one() -> None:
+    saved = [Block(1, "a", "CS-E1", "a", t(23, 9), t(23, 10))]
+    blocks = suggest_blocks([MON], [item("a", t(27, 12), 240)], [], saved, NOW, S)
+    assert blocks == []
 
 
 def test_suggestions_respect_cap_due_time_and_saved_blocks() -> None:

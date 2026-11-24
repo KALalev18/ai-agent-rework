@@ -22,7 +22,7 @@ def test_overview_stats(client: TestClient) -> None:
         "due_this_week": 4,
         "at_risk": 2,
         "tight": 2,
-        "planned_today_min": 285,
+        "planned_today_min": 300,
         "logged_week_min": 60,
         "done_week": 1,
     }

@@ -7,6 +7,7 @@ show up in a traceback, a log line or anything sent to the model.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import time
 from pathlib import Path
@@ -54,7 +55,7 @@ class Settings:
     day_start: time = time(9, 0)
     day_end: time = time(21, 0)
     daily_study_cap_min: int = 300
-    max_block_min: int = 90
+    max_block_min: int = 240
     sync_max_age_hours: int = 6
     eur_per_usd: float = 0.86
 
@@ -98,7 +99,32 @@ def load_settings(env_file: Path | None = None) -> Settings:
         day_start=day_start,
         day_end=day_end,
         daily_study_cap_min=_int("STUDY_DAILY_CAP_MIN", 300, 30, 900),
-        max_block_min=_int("STUDY_MAX_BLOCK_MIN", 90, 30, 240),
+        max_block_min=_int("STUDY_MAX_BLOCK_MIN", 240, 30, 480),
         sync_max_age_hours=_int("STUDY_SYNC_MAX_AGE_HOURS", 6, 0, 168),
         eur_per_usd=eur_per_usd,
     )
+
+
+API_KEY_RE = re.compile(r"^sk-ant-[A-Za-z0-9_\-]{20,200}$")
+
+
+def mask_secret(value: str) -> str:
+    """'sk-ant-api03-…abcd': enough to recognise a key, never enough to use it."""
+    return f"{value[:12]}…{value[-4:]}" if len(value) > 20 else "set"
+
+
+def set_env_value(path: Path, name: str, value: str) -> None:
+    """Set NAME=value in a .env file, keeping every other line. Written atomically."""
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    out, found = [], False
+    for line in lines:
+        if line.split("=", 1)[0].strip() == name:
+            out.append(f"{name}={value}")
+            found = True
+        else:
+            out.append(line)
+    if not found:
+        out.append(f"{name}={value}")
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text("\n".join(out) + "\n", encoding="utf-8")
+    tmp.replace(path)

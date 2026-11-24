@@ -24,8 +24,8 @@
         - 14:15-16:00 TU-E9004 Startup Finance lecture
 
         **Plan**
-        - 09:00-10:15, 12:00-13:30 and 13:45-14:15: CS-E9001 Assignment 3: Tool-calling agent (3 h left, due Wed 25 Nov 23:59)
-        - 16:00-17:30: MS-C9002 Exercise round 8 (due Thu 26 Nov 12:00)
+        - 12:00-14:00: MS-C9002 Exercise round 8 (due Thu 26 Nov 12:00)
+        - 16:00-19:00: CS-E9001 Assignment 3: Tool-calling agent, all 3 h left in one block (due Wed 25 Nov 23:59)
 
         **At risk**
         - Overdue: MS-C9002 Exercise round 7, was due Thu 19 Nov 12:00 (mycourses-demo.ics) and is not marked done.
@@ -114,13 +114,13 @@
   script:
     - tools: [{name: plan_week, input: {}}]
     - text: |
-        - **Mon 23 Nov**: CS-E9001 Assignment 3 (09:00-10:15, 12:00-13:30, 13:45-14:15), MS-C9002 Exercise round 8 16:00-17:30.
-        - **Tue 24 Nov**: Exercise round 8 09:00-11:45, ELEC-C9003 Lab report 4 17:00-19:45.
-        - **Wed 25 Nov**: Lab report 4 09:00-15:00 around the lecture, TU-E9004 Quiz 5 15:15-16:15.
-        - **Thu 26 Nov**: CS-E9001 Project milestone 2 09:00-13:00; your saved Lab report 4 block 18:00-19:30.
-        - **Fri 27 Nov**: Project milestone 2 09:00-16:15 around the lecture.
-        - **Sat 28 Nov**: Project milestone 2 09:00-14:15, including your saved block 10:00-12:00.
-        - **Sun 29 Nov**: Project milestone 2 09:00-14:45.
+        - **Mon 23 Nov**: MS-C9002 Exercise round 8 12:00-14:00, CS-E9001 Assignment 3 16:00-19:00.
+        - **Tue 24 Nov**: Exercise round 8 09:00-11:00, ELEC-C9003 Lab report 4 17:00-20:00.
+        - **Wed 25 Nov**: TU-E9004 Quiz 5 09:00-10:00, Lab report 4 12:00-15:30, CS-E9001 Project milestone 2 15:45-16:15.
+        - **Thu 26 Nov**: Project milestone 2 09:00-12:30; your saved Lab report 4 block 18:00-19:30.
+        - **Fri 27 Nov**: CS-E9001 Peer review 2 09:00-10:00, Project milestone 2 12:00-16:00.
+        - **Sat 28 Nov**: MS-C9002 Exercise round 9 09:00-10:00, your saved Project milestone 2 block 10:00-12:00, Peer review 2 12:00-14:00.
+        - **Sun 29 Nov**: Project milestone 2 09:00-13:00, Exercise round 9 13:15-14:15.
 
         **At risk**: Project milestone 2 (due Mon 30 Nov 16:00) does not fit even with this plan; MS-C9002 Exercise round 7 is overdue (was due Thu 19 Nov 12:00).
 
@@ -218,18 +218,16 @@
   approve: [true]
   expected_facts: [Assignment 3]
   db:
-    - {sql: "SELECT COUNT(*) FROM blocks", equals: 6}
+    - {sql: "SELECT COUNT(*) FROM blocks", equals: 4}
   script:
     - tools: [{name: plan_day, input: {}}]
     - tools:
         - name: schedule_blocks
           input:
             blocks:
-              - {item_id: D-cbe576, start: "2026-11-23T09:00", minutes: 75}
-              - {item_id: D-cbe576, start: "2026-11-23T12:00", minutes: 90}
-              - {item_id: D-cbe576, start: "2026-11-23T13:45", minutes: 30}
-              - {item_id: D-503d90, start: "2026-11-23T16:00", minutes: 90}
-    - text: "Saved 4 blocks for today, Mon 23 Nov: 09:00-10:15, 12:00-13:30 and 13:45-14:15 for CS-E9001 Assignment 3, and 16:00-17:30 for MS-C9002 Exercise round 8."
+              - {item_id: D-503d90, start: "2026-11-23T12:00", minutes: 120}
+              - {item_id: D-cbe576, start: "2026-11-23T16:00", minutes: 180}
+    - text: "Saved 2 blocks for today, Mon 23 Nov: 12:00-14:00 for MS-C9002 Exercise round 8 and 16:00-19:00 for CS-E9001 Assignment 3."
 
 - id: hallucination-trap
   question: When is the CS-E9001 final exam?

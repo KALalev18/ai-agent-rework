@@ -57,6 +57,7 @@ class WorkItem:
     logged_min: int
     source: str
     category: str = "deadline"
+    weight_pct: int | None = None
 
     @property
     def remaining_min(self) -> int:
@@ -113,6 +114,7 @@ def build_items(
                 logged.get(deadline.id, 0),
                 deadline.source,
                 deadline.category,
+                deadline.weight_pct,
             )
         )
     for task in tasks:
@@ -211,6 +213,10 @@ def assess_risks(
     return risks
 
 
+def _floor15(minutes: int) -> int:
+    return minutes - minutes % 15
+
+
 def suggest_blocks(
     days: Sequence[date],
     items: Sequence[WorkItem],
@@ -219,9 +225,14 @@ def suggest_blocks(
     now: datetime,
     settings: Settings,
 ) -> list[Suggestion]:
-    """Fill free time with study blocks, always working on the earliest-due unfinished item.
+    """Suggest at most one study block per item per day, as long as the work needs.
 
-    Blocks I already saved count as busy time and as work already scheduled for their item.
+    Items are taken earliest-deadline-first. Each gets one block, placed in the earliest free
+    slot that fits all its remaining work (up to the longest-block setting), otherwise in the
+    largest free slot. So a typical assignment is a single block; only big items (a project,
+    exam preparation) continue on the following days. Saved blocks count as busy time and as
+    work already scheduled, and an item that already has a saved block on a day gets no second
+    one that day.
     """
     remaining = {item.id: item.remaining_min for item in items}
     for block in saved:
@@ -233,36 +244,37 @@ def suggest_blocks(
     suggestions: list[Suggestion] = []
     for day in days:
         used = sum(minutes_between(b.start, b.end) for b in saved if b.start.date() == day)
-        for slot_start, slot_end in free_intervals(day, busy, now, settings):
-            cursor = slot_start
-            while True:
-                room = min(
-                    minutes_between(cursor, slot_end),
-                    settings.daily_study_cap_min - used,
-                    settings.max_block_min,
-                )
-                if room < MIN_BLOCK_MIN:
-                    break
-                item = next(
-                    (
-                        i
-                        for i in queue
-                        if remaining[i.id] > 0
-                        and (i.due is None or i.due >= cursor + timedelta(minutes=MIN_BLOCK_MIN))
-                    ),
-                    None,
-                )
-                if item is None:
-                    break
-                length = min(room, remaining[item.id])
+        has_block = {b.item_id for b in saved if b.start.date() == day}
+        free = free_intervals(day, busy, now, settings)
+        for item in queue:
+            cap_left = _floor15(settings.daily_study_cap_min - used)
+            if cap_left < MIN_BLOCK_MIN:
+                break
+            if remaining[item.id] <= 0 or item.id in has_block:
+                continue
+            need = remaining[item.id] + (-remaining[item.id]) % 15  # round up to 15 min
+            want = max(MIN_BLOCK_MIN, min(need, settings.max_block_min, cap_left))
+            usable = []
+            for index, (start, end) in enumerate(free):
                 if item.due is not None:
-                    length = min(length, minutes_between(cursor, item.due))
-                length = max(MIN_BLOCK_MIN, length - length % 15)
-                end = cursor + timedelta(minutes=length)
-                suggestions.append(
-                    Suggestion(item.id, item.course, item.title, cursor, end, item.due)
-                )
-                remaining[item.id] -= length
-                used += length
-                cursor = end + timedelta(minutes=BREAK_MIN)
-    return suggestions
+                    end = min(end, item.due)
+                length = _floor15(minutes_between(start, end))
+                if length >= MIN_BLOCK_MIN:
+                    usable.append((index, start, length))
+            if not usable:
+                continue
+            fitting = [u for u in usable if u[2] >= want]
+            index, start, length = fitting[0] if fitting else max(usable, key=lambda u: u[2])
+            length = min(length, want)
+            end = start + timedelta(minutes=length)
+            suggestions.append(Suggestion(item.id, item.course, item.title, start, end, item.due))
+            remaining[item.id] -= length
+            used += length
+            slot_end = free[index][1]
+            rest_start = end + timedelta(minutes=BREAK_MIN)
+            free[index : index + 1] = (
+                [(rest_start, slot_end)]
+                if minutes_between(rest_start, slot_end) >= BREAK_MIN
+                else []
+            )
+    return sorted(suggestions, key=lambda s: s.start)
