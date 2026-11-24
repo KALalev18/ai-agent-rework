@@ -54,7 +54,7 @@ function chip(entry, compact = true) {
     el("span", { class: "chip-text" }, compact ? `${d.course} ${d.title}` : `${d.course} · ${d.title}`));
   }
   if (type === "block") {
-    return el("div", { class: "cal-chip block", style: `--hue:${hue}`, title: `Study block ${d.block_id}: ${d.course} ${d.title} ${d.when}` },
+    return el("div", { class: "cal-chip study", style: `--hue:${hue}`, title: `Study block ${d.block_id}: ${d.course} ${d.title} ${d.when}` },
       el("span", { class: "chip-time" }, hm(d.start)), el("span", { class: "chip-text" }, `Study: ${d.title}`));
   }
   return el("div", { class: "cal-chip class", style: `--hue:${hue}`, title: `${d.title} ${d.when}` },

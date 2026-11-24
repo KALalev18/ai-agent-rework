@@ -7,7 +7,7 @@ function metric(label, value, hint) {
 
 async function runEval(target, button) {
   button.disabled = true;
-  button.replaceChildren(icon("refresh", 16), "Running 22 cases…");
+  button.replaceChildren(icon("refresh", 16), "Running the evaluation…");
   try {
     const data = await api.post("/api/eval");
     const s = data.summary;
@@ -40,7 +40,7 @@ async function runEval(target, button) {
 
 export async function render(view) {
   const { report, recent } = await api.get("/api/stats");
-  const evalTarget = el("div", {}, el("p", { class: "muted" }, "Runs the 22-question evaluation set against the fictional semester in replay mode: no API key, no cost, about a second."));
+  const evalTarget = el("div", {}, el("p", { class: "muted" }, "Runs the evaluation set against the fictional semester in replay mode: no API key, no cost, about a second."));
   const evalButton = el("button", { class: "primary", onclick: () => runEval(evalTarget, evalButton) }, icon("sparkle", 16), "Run evaluation");
 
   const sections = [

@@ -76,7 +76,10 @@ function renderEvent(runId, event) {
         el("div", { class: "answer-meta" }, el("span", { class: `pill ${event.grounded ? "good" : "danger"}` }, event.grounded ? (event.corrected ? "Grounded after correction" : "Grounded") : "Not grounded"), el("span", {}, event.footer))));
       break;
     case "error":
-      append(el("div", { class: "chat-error" }, event.message));
+      append(el("div", { class: "chat-error" }, event.message,
+        /API key/i.test(event.message)
+          ? el("button", { class: "primary small", onclick: () => { location.hash = "#/settings"; } }, icon("settings", 14), "Add your API key")
+          : null));
       break;
   }
 }
@@ -133,14 +136,17 @@ export async function render(view, { params = {}, overview }) {
   const chips = el("div", { class: "chips" });
   const drawChips = (all) => {
     const list = all ? state.questions : state.questions.slice(0, 6);
-    chips.replaceChildren(...list.map((q) => el("button", { onclick: () => ask(q) }, q)),
-      state.questions.length > 6 ? el("button", { class: "more", onclick: () => drawChips(!all) }, all ? "Fewer" : `+${state.questions.length - 6} more`) : null);
+    const buttons = list.map((q) => el("button", { onclick: () => ask(q) }, q));
+    if (state.questions.length > 6) {
+      buttons.push(el("button", { class: "more", onclick: () => drawChips(!all) }, all ? "Fewer" : `+${state.questions.length - 6} more`));
+    }
+    chips.replaceChildren(...buttons); // never pass null: replaceChildren would print "null"
   };
   drawChips(false);
 
   view.replaceChildren(
     el("section", { class: "page-head" },
-      el("div", {}, el("h1", {}, "Assistant"), el("p", { class: "lead" }, state.mode === "demo" ? "Demo: answers are replays of scripted model turns; the tools, approval gate and grounding check run for real." : `Claude (${overview.model}) with 13 tools. Changes need your approval.`)),
+      el("div", {}, el("h1", {}, "Assistant"), el("p", { class: "lead" }, state.mode === "demo" ? "Demo: answers are replays of scripted model turns; the tools, approval gate and grounding check run for real." : `Claude (${overview.model}) reads your courses, deadlines and plan through tools, and asks before it changes anything.`)),
       el("button", { class: "ghost", onclick: () => { state.log = null; state.conversationId = null; render(view, { params: {}, overview }); } }, icon("plus", 16), "New chat"),
     ),
     el("article", { class: "card chat-card" }, chips, state.log, form),

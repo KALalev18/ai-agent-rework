@@ -66,8 +66,9 @@ export async function deadlineDialog({ courses, kinds, course = "", date = "", e
       el("label", {}, "Date", el("input", { name: "date", type: "date", required: true, value: existing ? existing.due.slice(0, 10) : date })),
       el("label", {}, "Time", timeInput),
       el("label", {}, "Effort (hours)", estimate),
+      el("label", {}, "Grade weight (%)", el("input", { name: "weight", type: "number", min: "0", max: "100", step: "1", placeholder: "optional", value: existing?.weight_pct ?? "" })),
     ),
-    el("p", { class: "muted small" }, "The effort is used by the risk check and the planner. Leave it empty for the default by type; you can change it later."),
+    el("p", { class: "muted small" }, "Effort drives the risk check and the planner (empty = default for the type). Grade weight, from the course's grading criteria, helps the assistant tell you what matters most."),
   );
   const values = await modal({
     title: existing ? `Edit ${existing.title}` : "Add a deadline",
@@ -77,6 +78,7 @@ export async function deadlineDialog({ courses, kinds, course = "", date = "", e
   if (!values) return null;
   const body = { kind: values.kind, title: values.title, due: `${values.date}T${values.time}` };
   if (values.hours) body.estimate_min = Math.round(Number(values.hours) * 60);
+  if (values.weight !== "") body.weight_pct = Number(values.weight);
   if (existing) return send("PATCH", `/api/deadlines/${existing.id}`, body, "Deadline updated");
   return send("POST", `/api/courses/${encodeURIComponent(values.course)}/deadlines`, body, `Added ${values.title}`);
 }
@@ -118,6 +120,7 @@ function courseCard(course, data) {
         el("li", { class: `list-row deadline-row ${d.done ? "done" : ""}` },
           el("span", { class: `kind-pill ${d.kind}` }, KIND_LABEL[d.kind] || d.kind),
           el("span", { class: "grow" }, d.title),
+          d.weight_pct != null ? el("span", { class: "weight", title: "Share of the course grade" }, `${d.weight_pct}%`) : null,
           el("span", { class: "when" }, d.due_local),
           d.done ? el("span", { class: "pill good" }, "Done") : badge(d.risk),
           el("button", { class: "icon-button", title: "Edit", "aria-label": `Edit ${d.title}`, onclick: () => deadlineDialog({ courses: data.courses, kinds: data.kinds, existing: d }) }, icon("edit", 15)),
