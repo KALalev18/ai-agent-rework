@@ -59,7 +59,7 @@ def test_progress_stats_settings(client: TestClient) -> None:
     assert client.get("/api/stats").json() == {"report": None, "recent": []}
     settings = client.get("/api/settings").json()
     assert settings["deadlines_source"] == "mycourses-demo.ics"
-    assert len(settings["tools"]) == 13
+    assert len(settings["tools"]) == 14
 
 
 def test_button_actions_preview_then_apply(client: TestClient) -> None:

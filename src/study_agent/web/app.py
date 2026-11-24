@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 import tempfile
 import threading
 import time
@@ -27,7 +28,8 @@ import uuid
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
+from datetime import time as clock_time
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -37,6 +39,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from study_agent import courses as course_data
 from study_agent.agent import Agent, AgentResult
 from study_agent.config import Settings
 from study_agent.demo import demo_clock, demo_settings, seed
@@ -47,7 +50,7 @@ from study_agent.render import footer
 from study_agent.runlog import log_run
 from study_agent.sources.loader import Calendars, SourceError, is_url
 from study_agent.stats import compute_stats
-from study_agent.store import Block, Store
+from study_agent.store import Block, Store, parse_ref
 from study_agent.timeutil import (
     Clock,
     day_bounds,
@@ -84,6 +87,27 @@ class AskBody(BaseModel):
 
 class DecisionBody(BaseModel):
     approve: bool
+
+
+class CourseBody(BaseModel):
+    code: str = Field(default="", max_length=40)
+    name: str = Field(default="", max_length=200)
+
+
+class DeadlineBody(BaseModel):
+    kind: str = "assignment"
+    title: str = Field(max_length=400)
+    due: str = Field(max_length=40)
+    estimate_min: int | None = Field(default=None, ge=5, le=6000)
+
+
+class SessionBody(BaseModel):
+    kind: str = "lecture"
+    weekday: int = Field(ge=0, le=6)
+    start: clock_time
+    end: clock_time
+    first_day: date
+    last_day: date
 
 
 @dataclass
@@ -264,8 +288,17 @@ def create_app(
                     "logged_week_min": sum(p.minutes or 0 for p in logged),
                     "done_week": done_week,
                 },
-                "warnings": ctx.calendars.warnings,
+                # "No calendar URL set" is not a problem when I type my courses in myself.
+                "warnings": [w for w in ctx.calendars.warnings if "is not set" not in w],
                 "demo_questions": list(demo_cases),
+                "courses": sorted(
+                    {c.code for c in store.courses()} | {d.course for d in ctx.deadlines()}
+                ),
+                "setup": {
+                    "courses": len(store.courses()),
+                    "calendar_connected": bool(settings.deadlines_source),
+                    "has_data": bool(items or ctx.deadlines()),
+                },
             }
 
         result: dict[str, Any] = with_context(build)
@@ -281,7 +314,7 @@ def create_app(
             done: list[dict[str, Any]] = []
             if include_done:
                 states = store.deadline_states()
-                for deadline in ctx.calendars.deadlines():
+                for deadline in ctx.deadlines():
                     state = states.get(deadline.id)
                     if state and state.done_at:
                         done.append(
@@ -344,7 +377,7 @@ def create_app(
             lo, _ = day_bounds(days[0])
             _, hi = day_bounds(days[-1])
             now = ctx.now()
-            events = ctx.calendars.events(days[0], days[-1])
+            events = ctx.events(days[0], days[-1])
             open_items = ctx.items()
             risks = ctx.risks(open_items)
             future_saved = store.blocks_between(now, now + timedelta(days=120))
@@ -506,6 +539,232 @@ def create_app(
                 for r in results
             ],
         }
+
+    # --- courses I type in -----------------------------------------------------------------------
+
+    def course_edit(fn: Callable[[Store], Any]) -> Any:
+        """Run a course change; bad input becomes a 400 with a readable message."""
+        store = Store(settings.db_path)
+        try:
+            return fn(store)
+        except course_data.CourseInputError as exc:
+            raise HTTPException(400, str(exc)) from None
+        except sqlite3.IntegrityError:
+            raise HTTPException(409, "that course already exists") from None
+        finally:
+            store.close()
+
+    @app.get("/api/courses")
+    def list_courses() -> dict[str, Any]:
+        def build(store: Store, ctx: ToolContext) -> dict[str, Any]:
+            open_items = ctx.items()
+            risks = ctx.risks(open_items)
+            by_id = {i.id: i for i in open_items}
+            states = store.deadline_states()
+            mine = store.course_deadlines()
+            sessions = store.sessions()
+            result = []
+            for course in store.courses():
+                rows = []
+                for d in (x for x in mine if x.course == course.code):
+                    item = by_id.get(d.ref)
+                    state = states.get(d.ref)
+                    rows.append(
+                        {
+                            "id": d.ref,
+                            "kind": d.kind,
+                            "title": d.title,
+                            "due": iso(d.due),
+                            "due_local": fmt_moment(d.due),
+                            "done": bool(state and state.done_at),
+                            "risk": risks[d.ref].status if d.ref in risks else None,
+                            "estimate_min": item.estimate_min if item else None,
+                            "remaining_min": item.remaining_min if item else 0,
+                        }
+                    )
+                result.append(
+                    {
+                        "code": course.code,
+                        "name": course.name,
+                        "deadlines": rows,
+                        "sessions": [
+                            {
+                                "id": x.id,
+                                "kind": x.kind,
+                                "weekday": x.weekday,
+                                "start": x.start.strftime("%H:%M"),
+                                "end": x.end.strftime("%H:%M"),
+                                "first_day": x.first_day.isoformat(),
+                                "last_day": x.last_day.isoformat(),
+                            }
+                            for x in sessions
+                            if x.course == course.code
+                        ],
+                    }
+                )
+            entered = {c.code for c in store.courses()}
+            imported = sorted({d.course for d in ctx.calendars.deadlines()} - entered)
+            return {
+                "courses": result,
+                "imported_courses": imported,
+                "kinds": list(course_data.KINDS),
+                "session_kinds": list(course_data.SESSION_KINDS),
+                "today": ctx.today().isoformat(),
+            }
+
+        result: dict[str, Any] = with_context(build)
+        return result
+
+    @app.post("/api/courses", dependencies=[Depends(require_app_header)])
+    def create_course(body: CourseBody) -> dict[str, str]:
+        def run(store: Store) -> dict[str, str]:
+            code = course_data.clean_code(body.code)
+            name = course_data.clean_text(body.name or code, "name", 120)
+            store.add_course(code, name, clock())
+            return {"code": code}
+
+        result: dict[str, str] = course_edit(run)
+        return result
+
+    @app.patch("/api/courses/{code}", dependencies=[Depends(require_app_header)])
+    def rename_course(code: str, body: CourseBody) -> dict[str, bool]:
+        def run(store: Store) -> dict[str, bool]:
+            if store.course(code) is None:
+                raise HTTPException(404, "unknown course")
+            store.rename_course(code, course_data.clean_text(body.name or code, "name", 120))
+            return {"ok": True}
+
+        result: dict[str, bool] = course_edit(run)
+        return result
+
+    @app.delete("/api/courses/{code}", dependencies=[Depends(require_app_header)])
+    def delete_course(code: str) -> dict[str, bool]:
+        def run(store: Store) -> dict[str, bool]:
+            if store.course(code) is None:
+                raise HTTPException(404, "unknown course")
+            store.delete_course(code)
+            return {"ok": True}
+
+        result: dict[str, bool] = course_edit(run)
+        return result
+
+    def _deadline_fields(body: DeadlineBody) -> tuple[str, str, datetime]:
+        return (
+            course_data.clean_kind(body.kind),
+            course_data.clean_text(body.title, "title"),
+            course_data.parse_due(body.due),
+        )
+
+    @app.post("/api/courses/{code}/deadlines", dependencies=[Depends(require_app_header)])
+    def create_deadline(code: str, body: DeadlineBody) -> dict[str, str]:
+        def run(store: Store) -> dict[str, str]:
+            if store.course(code) is None:
+                raise HTTPException(404, "unknown course")
+            kind, title, due = _deadline_fields(body)
+            ref = f"M-{store.add_course_deadline(code, kind, title, due, clock())}"
+            if body.estimate_min:
+                store.set_deadline_estimate(ref, body.estimate_min)
+            return {"id": ref}
+
+        result: dict[str, str] = course_edit(run)
+        return result
+
+    def _my_deadline(store: Store, ref: str) -> int:
+        number = parse_ref(ref, "M")
+        if number is None or not any(d.id == number for d in store.course_deadlines()):
+            raise HTTPException(404, "unknown deadline")
+        return number
+
+    @app.patch("/api/deadlines/{ref}", dependencies=[Depends(require_app_header)])
+    def edit_deadline(ref: str, body: DeadlineBody) -> dict[str, bool]:
+        def run(store: Store) -> dict[str, bool]:
+            number = _my_deadline(store, ref)
+            store.update_course_deadline(number, *_deadline_fields(body))
+            if body.estimate_min:
+                store.set_deadline_estimate(ref.upper(), body.estimate_min)
+            return {"ok": True}
+
+        result: dict[str, bool] = course_edit(run)
+        return result
+
+    @app.delete("/api/deadlines/{ref}", dependencies=[Depends(require_app_header)])
+    def remove_deadline(ref: str) -> dict[str, bool]:
+        def run(store: Store) -> dict[str, bool]:
+            store.delete_course_deadline(_my_deadline(store, ref))
+            return {"ok": True}
+
+        result: dict[str, bool] = course_edit(run)
+        return result
+
+    @app.post("/api/courses/{code}/sessions", dependencies=[Depends(require_app_header)])
+    def create_session(code: str, body: SessionBody) -> dict[str, int]:
+        def run(store: Store) -> dict[str, int]:
+            if store.course(code) is None:
+                raise HTTPException(404, "unknown course")
+            kind = course_data.clean_kind(body.kind, course_data.SESSION_KINDS)
+            if body.end <= body.start:
+                raise course_data.CourseInputError("a class must end after it starts")
+            if body.last_day < body.first_day:
+                raise course_data.CourseInputError("the last week is before the first week")
+            new_id = store.add_session(
+                code, kind, body.weekday, body.start, body.end, body.first_day, body.last_day
+            )
+            return {"id": new_id}
+
+        result: dict[str, int] = course_edit(run)
+        return result
+
+    @app.delete("/api/sessions/{session_id}", dependencies=[Depends(require_app_header)])
+    def remove_session(session_id: int) -> dict[str, bool]:
+        def run(store: Store) -> dict[str, bool]:
+            store.delete_session(session_id)
+            return {"ok": True}
+
+        result: dict[str, bool] = course_edit(run)
+        return result
+
+    @app.get("/api/calendar")
+    def month(month: str | None = None) -> dict[str, Any]:
+        """Everything in a month grid: deadlines (open and done), classes and study blocks."""
+
+        def build(store: Store, ctx: ToolContext) -> dict[str, Any]:
+            try:
+                first = date.fromisoformat(f"{month}-01") if month else ctx.today().replace(day=1)
+            except ValueError:
+                raise HTTPException(400, "month must look like 2026-11") from None
+            grid_start = monday_of(first)
+            next_month = (first.replace(day=28) + timedelta(days=4)).replace(day=1)
+            grid_end = monday_of(next_month - timedelta(days=1)) + timedelta(days=6)
+            lo, _ = day_bounds(grid_start)
+            _, hi = day_bounds(grid_end)
+            open_items = ctx.items()
+            risks = ctx.risks(open_items)
+            open_ids = {i.id for i in open_items}
+            deadlines = [
+                {
+                    **d.to_dict(),
+                    "done": d.id not in open_ids,
+                    "risk": risks[d.id].status if d.id in risks else None,
+                }
+                for d in ctx.deadlines()
+                if lo <= d.due < hi
+            ]
+            return {
+                "month": first.strftime("%Y-%m"),
+                "label": first.strftime("%B %Y"),
+                "today": ctx.today().isoformat(),
+                "grid_start": grid_start.isoformat(),
+                "grid_end": grid_end.isoformat(),
+                "deadlines": deadlines,
+                "events": [e.to_dict() for e in ctx.events(grid_start, grid_end)],
+                "blocks": [_block_dict(b) for b in store.blocks_between(lo, hi)],
+                "courses": sorted(
+                    {str(d["course"]) for d in deadlines} | {c.code for c in store.courses()}
+                ),
+            }
+
+        result: dict[str, Any] = with_context(build)
+        return result
 
     # --- the assistant ------------------------------------------------------------------------
 
