@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from study_agent import courses
 from study_agent.config import Settings
+from study_agent.llm import LLMError
 from study_agent.sources.loader import Calendars
 from study_agent.store import Store
 from study_agent.timeutil import TZ, fixed_clock
@@ -243,3 +244,70 @@ def test_course_api_end_to_end(client: TestClient) -> None:
     assert client.delete("/api/deadlines/M-1", headers=HEADERS).status_code == 404
     assert client.delete("/api/courses/CS-E4780", headers=HEADERS).json() == {"ok": True}
     assert client.get("/api/courses").json()["courses"] == []
+
+
+def test_old_databases_get_the_weight_column(tmp_path: Path) -> None:
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "CREATE TABLE course_deadlines (id INTEGER PRIMARY KEY, course TEXT NOT NULL,"
+        " kind TEXT NOT NULL, title TEXT NOT NULL, due TEXT NOT NULL, created_at TEXT NOT NULL)"
+    )
+    conn.commit()
+    conn.close()
+    store = Store(path)
+    columns = {r["name"] for r in store.conn.execute("PRAGMA table_info(course_deadlines)")}
+    assert "weight_pct" in columns
+    store.close()
+
+
+def test_grade_weight_reaches_the_agent(mine: ToolContext) -> None:
+    args = {
+        "course": "CS-E4780",
+        "kind": "project",
+        "title": "Course project",
+        "due": "2026-12-04",
+        "weight_pct": 40,
+    }
+    applied = json.loads(execute("add_deadline", args, mine, lambda p: True).content)
+    assert "Grade weight: 40 %" in applied["change"]
+    result = json.loads(
+        execute("get_deadlines", {"to_date": "2026-12-31"}, mine, lambda p: False).content
+    )
+    assert result["deadlines"][0]["grade_weight_pct"] == 40
+    assert execute("add_deadline", {**args, "weight_pct": 140}, mine, lambda p: True).is_error
+
+
+def test_api_key_is_checked_saved_and_never_echoed(tmp_path: Path) -> None:
+    env = tmp_path / ".env"
+    env.write_text("STUDY_EFFORT=low\nANTHROPIC_API_KEY=\n", encoding="utf-8")
+
+    def checker(key: str) -> None:  # stands in for the real call to Anthropic
+        if key.endswith("bad"):
+            raise LLMError("Anthropic rejected this key")
+
+    app = create_app(
+        Settings(data_dir=tmp_path / "d"),
+        allowed_hosts=("testserver",),
+        env_file=env,
+        key_checker=checker,
+    )
+    client = TestClient(app)
+    url = "/api/settings/api-key"
+    good = "sk-ant-api03-" + "x" * 40 + "good"
+
+    malformed = client.post(url, json={"api_key": "hello-world-123"}, headers=HEADERS)
+    assert malformed.status_code == 400
+    rejected = client.post(url, json={"api_key": good[:-4] + "xbad"}, headers=HEADERS)
+    assert rejected.status_code == 400 and "rejected" in rejected.json()["detail"]
+    assert "ANTHROPIC_API_KEY=\n" in env.read_text(encoding="utf-8")  # nothing saved
+
+    saved = client.post(url, json={"api_key": good}, headers=HEADERS).json()
+    assert saved == {"api_key": "sk-ant-api03…good"}
+    text = env.read_text(encoding="utf-8")
+    assert f"ANTHROPIC_API_KEY={good}" in text and "STUDY_EFFORT=low" in text
+    shown = client.get("/api/settings").json()
+    assert shown["api_key"] == "sk-ant-api03…good" and good not in json.dumps(shown)
+    assert client.post(url, json={"api_key": good}).status_code == 403  # CSRF guard

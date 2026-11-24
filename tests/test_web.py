@@ -41,7 +41,9 @@ def live_client(settings: Settings, script: list[dict[str, Any]]) -> TestClient:
 def test_index_and_demo_overview(settings: Settings) -> None:
     client = TestClient(create_app(settings, demo=True, allowed_hosts=HOSTS))
     assert "Study Agent" in client.get("/").text
-    assert client.get("/static/js/main.js").status_code == 200
+    script = client.get("/static/js/main.js")
+    assert script.status_code == 200
+    assert script.headers["cache-control"] == "no-cache"  # never run stale JavaScript
     data = client.get("/api/overview").json()
     assert data["mode"] == "demo"
     assert data["now"] == "Mon 23 Nov 08:00"

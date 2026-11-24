@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sqlite3
 import tempfile
 import threading
@@ -33,7 +34,7 @@ from datetime import time as clock_time
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import Body, Depends, FastAPI, Header, HTTPException
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -41,10 +42,10 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from study_agent import courses as course_data
 from study_agent.agent import Agent, AgentResult
-from study_agent.config import Settings
+from study_agent.config import API_KEY_RE, Settings, mask_secret, set_env_value
 from study_agent.demo import demo_clock, demo_settings, seed
 from study_agent.evals import load_cases, run_case, summarize
-from study_agent.llm import AnthropicModel, LLMError, ModelClient
+from study_agent.llm import AnthropicModel, LLMError, ModelClient, check_api_key
 from study_agent.planner import suggest_blocks
 from study_agent.render import footer
 from study_agent.runlog import log_run
@@ -89,6 +90,10 @@ class DecisionBody(BaseModel):
     approve: bool
 
 
+class ApiKeyBody(BaseModel):
+    api_key: str = Field(min_length=10, max_length=300)
+
+
 class CourseBody(BaseModel):
     code: str = Field(default="", max_length=40)
     name: str = Field(default="", max_length=200)
@@ -99,6 +104,7 @@ class DeadlineBody(BaseModel):
     title: str = Field(max_length=400)
     due: str = Field(max_length=40)
     estimate_min: int | None = Field(default=None, ge=5, le=6000)
+    weight_pct: int | None = Field(default=None, ge=0, le=100)
 
 
 class SessionBody(BaseModel):
@@ -191,7 +197,10 @@ def create_app(
     demo: bool = False,
     client_factory: Callable[[], ModelClient] = AnthropicModel,
     allowed_hosts: tuple[str, ...] = ("127.0.0.1", "localhost"),
+    env_file: Path | None = None,
+    key_checker: Callable[[str], None] = check_api_key,
 ) -> FastAPI:
+    env_path = env_file or Path.cwd() / ".env"  # the same file load_settings() reads
     clock: Clock = system_clock
     demo_cases = {c.question: c for c in load_cases()} if demo else {}
     if demo:
@@ -207,6 +216,16 @@ def create_app(
     app = FastAPI(title="Study Agent", docs_url=None, redoc_url=None)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(allowed_hosts))
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+    @app.middleware("http")
+    async def no_stale_pages(request: Request, call_next: Any) -> Response:
+        """Make browsers revalidate the page and its scripts on every load (cheap via ETag), so
+        an updated app never runs yesterday's cached JavaScript."""
+        response: Response = await call_next(request)
+        if request.url.path == "/" or request.url.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
     runs: dict[str, Run] = {}
     conversations: dict[str, list[dict[str, Any]]] = {}
     calendars_lock = threading.Lock()
@@ -477,6 +496,8 @@ def create_app(
             "timetable_source": _source_label(settings.timetable_source),
             "sync_max_age_hours": settings.sync_max_age_hours,
             "data_dir": str(settings.data_dir),
+            "api_key": mask_secret(key) if (key := os.environ.get("ANTHROPIC_API_KEY")) else None,
+            "env_file": str(env_path),
             "tools": [{"name": t.name, "writes": t.writes} for t in TOOLS],
         }
 
@@ -509,6 +530,26 @@ def create_app(
     @app.post("/api/actions/{name}", dependencies=[Depends(require_app_header)])
     def action(name: str, args: ToolArgs = None) -> dict[str, Any]:
         return _run_action(name, args or {}, apply=True)
+
+    @app.post("/api/settings/api-key", dependencies=[Depends(require_app_header)])
+    def save_api_key(body: ApiKeyBody) -> dict[str, str]:
+        """Check a pasted key with Anthropic, then store it in the local, gitignored .env.
+
+        The key only travels from my browser to this local server and on to Anthropic. It is
+        never logged, and only a masked form is ever sent back to the page.
+        """
+        if demo:
+            raise HTTPException(400, "demo mode does not use an API key")
+        key = body.api_key.strip()
+        if not API_KEY_RE.match(key):
+            raise HTTPException(400, "that does not look like an Anthropic API key (sk-ant-...)")
+        try:
+            key_checker(key)
+        except LLMError as exc:
+            raise HTTPException(400, str(exc)) from None
+        set_env_value(env_path, "ANTHROPIC_API_KEY", key)
+        os.environ["ANTHROPIC_API_KEY"] = key  # new assistant runs use it at once
+        return {"api_key": mask_secret(key)}
 
     @app.post("/api/sync", dependencies=[Depends(require_app_header)])
     def sync() -> dict[str, Any]:
@@ -579,6 +620,7 @@ def create_app(
                             "done": bool(state and state.done_at),
                             "risk": risks[d.ref].status if d.ref in risks else None,
                             "estimate_min": item.estimate_min if item else None,
+                            "weight_pct": d.weight_pct,
                             "remaining_min": item.remaining_min if item else 0,
                         }
                     )
@@ -661,7 +703,7 @@ def create_app(
             if store.course(code) is None:
                 raise HTTPException(404, "unknown course")
             kind, title, due = _deadline_fields(body)
-            ref = f"M-{store.add_course_deadline(code, kind, title, due, clock())}"
+            ref = f"M-{store.add_course_deadline(code, kind, title, due, clock(), body.weight_pct)}"
             if body.estimate_min:
                 store.set_deadline_estimate(ref, body.estimate_min)
             return {"id": ref}
@@ -679,7 +721,7 @@ def create_app(
     def edit_deadline(ref: str, body: DeadlineBody) -> dict[str, bool]:
         def run(store: Store) -> dict[str, bool]:
             number = _my_deadline(store, ref)
-            store.update_course_deadline(number, *_deadline_fields(body))
+            store.update_course_deadline(number, *_deadline_fields(body), body.weight_pct)
             if body.estimate_min:
                 store.set_deadline_estimate(ref.upper(), body.estimate_min)
             return {"ok": True}

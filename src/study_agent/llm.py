@@ -66,6 +66,20 @@ class Usage:
         )
 
 
+def check_api_key(key: str) -> None:
+    """Verify a key with a free call (list models). Raises LLMError with a readable reason."""
+    try:
+        anthropic.Anthropic(api_key=key, max_retries=1).models.list(limit=1)
+    except anthropic.AuthenticationError:
+        raise LLMError("Anthropic rejected this key; check that you copied all of it") from None
+    except anthropic.PermissionDeniedError:
+        raise LLMError("this key has no permission to use the API") from None
+    except anthropic.APIConnectionError:
+        raise LLMError("could not reach Anthropic to check the key (network error)") from None
+    except anthropic.AnthropicError as exc:
+        raise LLMError(f"could not check the key: {exc}") from None
+
+
 def cost_usd(model: str, usage: Usage) -> float | None:
     prices = PRICES.get(model)
     if prices is None:
@@ -169,8 +183,8 @@ class AnthropicModel:
             if "authentication" not in str(exc).lower():
                 raise
             raise LLMError(
-                "no Claude API credentials: set ANTHROPIC_API_KEY in .env"
-                " (or try `study demo`, which needs no key)"
+                "no Claude API key yet: add it on the Settings page, or set ANTHROPIC_API_KEY"
+                " in .env (`study demo` works without one)"
             ) from None
         data = message.to_dict(mode="json")
         if self.record_to is not None:
