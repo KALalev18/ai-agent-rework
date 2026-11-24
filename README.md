@@ -88,10 +88,12 @@ The screenshots above are real `study web --demo` pages captured in headless Edg
 
 ## Two ways to get your data in
 
-- **Type it in** on the Courses page: course, deadlines with a type (assignment, project, exam, quiz, lab, presentation), due time and effort, and weekly classes with their first and last week.
+- **Type it in** on the Courses page: course, deadlines with a type (assignment, project, exam, quiz, lab, presentation), due time, effort and, optionally, the **grade weight** from the course's grading criteria, and weekly classes with their first and last week.
 - **Import** a MyCourses `.ics` export and a timetable (`.ics` or YAML).
 
 [`courses.py`](src/study_agent/courses.py) converts typed-in courses into the same `Deadline` and `Event` objects the `.ics` parser produces, so nothing downstream knows the difference: the risk check, planner, tools, agent and grounding checker work unchanged, and both sources can be mixed. Typed-in deadlines get ids like `M-3`; their done-state, estimates and logged time use the same tables as imported ones. Weekly classes are expanded per date in Helsinki time, so a Monday 10:15 lecture stays at 10:15 across the DST change.
+
+Grade weights are deliberately **not** part of the risk calculation: a 5% quiz due tomorrow is still due tomorrow. They reach the assistant as `grade_weight_pct`, and the system prompt tells it to name them when they change the advice ("the 40% project matters more than this week's 5% quiz") and never to guess one.
 
 ## Why I built it
 
@@ -114,6 +116,10 @@ At Aalto my deadlines are spread across MyCourses, course pages and my own notes
 - **Smaller, fresher context.** A semester calendar is hundreds of events. Tools return only the requested range, already filtered (e.g. "opens" events and finished deadlines are dropped).
 - **Checkable answers.** Every fact in an answer must exist in a tool result from this run, which is what makes the grounding checker possible.
 - **Same data with or without the model.** `study deadlines` prints the exact data the agent sees, with no model call.
+
+### How study blocks are planned
+
+Each day, open work is taken earliest-deadline-first and every item gets **one** block: in the earliest free slot that fits all its remaining effort (up to 4 h, `STUDY_MAX_BLOCK_MIN`), otherwise in the largest free slot. So an assignment is a single block instead of scattered fragments, and only big items (a project, exam preparation) continue on later days, at most one block per day. Suggestions stay inside the study window, around classes, before the due time and under the daily cap.
 
 ### How risk is computed
 
@@ -199,7 +205,7 @@ Every number here comes from a command in this table. Numbers I have not measure
 
 | What | Result | Command |
 |---|---|---|
-| Tests | **154 passed**, 90% branch coverage | `uv run pytest --cov` |
+| Tests | **159 passed**, 90% branch coverage | `uv run pytest --cov` |
 | Eval, replay mode | **23/23** cases; 0 ungrounded claims after the check; the checker caught the 2 planted claims in `hallucination-trap` | `uv run study eval` |
 | Eval, live mode | *pending* | `uv run study eval --live --record` |
 | `study today` latency p50 / p95 | *pending, needs daily use* | `uv run study stats` |
@@ -226,7 +232,7 @@ uv run study eval
 
 1. `uv run study web` and open **Courses**: add each course, then its assignments, projects and exams (date, time, roughly how many hours), then its weekly lectures and exercise sessions.
 2. Everything else uses that data at once: Today, the Calendar, the Planner and the risk check.
-3. For the assistant, put `ANTHROPIC_API_KEY` in `.env` (copy `.env.example`). It can also add deadlines for you: *"add my CS-E4780 exam on 14 Dec at 9"*, after your approval.
+3. For the assistant, paste your API key on the **Settings** page: it is checked with Anthropic (a free model-list call), then saved to the gitignored `.env`, and only ever shown masked. It can also add deadlines for you: *"add my CS-E4780 exam on 14 Dec at 9"*, after your approval.
 
 Your data lives in a local SQLite file (`~/.study-agent/study.db`), never in the repository.
 
@@ -256,7 +262,7 @@ src/study_agent/
   courses.py      courses I type in -> the same Deadline/Event objects as imports
   web/            FastAPI backend + static HTML/CSS/JS dashboard and chat
   cli.py, render.py, stats.py, runlog.py
-tests/            154 tests: parsing, DST, planner, approval gate, checker, loop, live request shape, web
+tests/            159 tests: parsing, DST, planner, approval gate, checker, loop, live request shape, web
 ```
 
 ## What I'd do next
