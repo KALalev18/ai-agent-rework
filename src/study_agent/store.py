@@ -551,6 +551,10 @@ class Store:
                 " WHERE id = ?",
                 (kind, title, _utc(due), weight_pct, deadline_id),
             )
+            # Saved study blocks show the item's title, so keep them in step with a rename.
+            conn.execute(
+                "UPDATE blocks SET title = ? WHERE item_id = ?", (title, deadline_ref(deadline_id))
+            )
 
     def delete_course_deadline(self, deadline_id: int) -> None:
         with self.transaction() as conn:

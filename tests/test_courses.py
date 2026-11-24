@@ -311,3 +311,17 @@ def test_api_key_is_checked_saved_and_never_echoed(tmp_path: Path) -> None:
     shown = client.get("/api/settings").json()
     assert shown["api_key"] == "sk-ant-api03…good" and good not in json.dumps(shown)
     assert client.post(url, json={"api_key": good}).status_code == 403  # CSRF guard
+
+
+def test_renaming_a_deadline_renames_its_saved_blocks(mine: ToolContext) -> None:
+    store = mine.store
+    store.add_course("CS-E4850", "Computer Vision", NOW)
+    due = datetime(2026, 11, 27, 23, 59, tzinfo=TZ)
+    number = store.add_course_deadline("CS-E4850", "assignment", "Assignment 12", due, NOW)
+    start = datetime(2026, 11, 25, 10, 0, tzinfo=TZ)
+    store.add_block(
+        f"M-{number}", "CS-E4850", "Assignment 12", start, start + timedelta(hours=1), NOW
+    )
+    noon = datetime(2026, 11, 27, 11, 59, tzinfo=TZ)
+    store.update_course_deadline(number, "assignment", "Exercise round 12", noon)
+    assert [b.title for b in store.blocks_for(f"M-{number}")] == ["Exercise round 12"]
