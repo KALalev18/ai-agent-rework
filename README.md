@@ -51,7 +51,8 @@ The risk check is the point of the project. On Tuesday it showed that Friday 27 
 ```mermaid
 flowchart LR
     CLI["CLI<br/>study today / ask / done"] --> Loop["Agent loop<br/>(plain Python, max 8 rounds)"]
-    Web["Web app (FastAPI)<br/>8 pages + Approve/Decline"] --> Loop`n    Web -->|"buttons: preview, then apply"| Write
+    Web["Web app (FastAPI)<br/>10 pages + Approve/Decline"] --> Loop
+    Web -->|"buttons: preview, then apply"| Write
     Loop <-->|"messages + 14 tool schemas<br/>(prompt-cached)"| Claude["Claude API<br/>claude-opus-5-5"]
     Loop --> Tools["Tools"]
     Tools --> Read["Read-only (run freely)<br/>get_deadlines, get_timetable,<br/>plan_day, plan_week,<br/>list_tasks, get_progress"]
