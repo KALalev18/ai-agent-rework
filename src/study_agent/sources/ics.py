@@ -15,7 +15,7 @@ from typing import Any
 import icalendar
 import recurring_ical_events
 
-from study_agent.models import Deadline, Event, find_course_code, short_id
+from study_agent.models import Deadline, Event, find_course_code, infer_category, short_id
 from study_agent.timeutil import TZ, end_of_day, to_local
 
 _OPENS_RE = re.compile(r"\bopens?\s*$", re.IGNORECASE)
@@ -72,7 +72,9 @@ def parse_deadlines(data: bytes, source: str) -> list[Deadline]:
         # Drop a leading "CS-E4780: " from the title when the course code is already known.
         title = re.sub(rf"^{re.escape(course)}\s*[:\-]\s*", "", title)
         uid = _text(component, "UID") or f"{summary}|{due.isoformat()}"
-        deadlines.append(Deadline(short_id("D", uid), course, title, due, source))
+        deadlines.append(
+            Deadline(short_id("D", uid), course, title, due, source, infer_category(title))
+        )
     deadlines.sort(key=lambda d: (d.due, d.course, d.title))
     return deadlines
 

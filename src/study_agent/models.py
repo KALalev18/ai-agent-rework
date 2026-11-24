@@ -21,6 +21,25 @@ def find_course_code(*texts: str) -> str | None:
     return None
 
 
+CATEGORY_WORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("exam", ("exam", "tentti", "midterm")),
+    ("project", ("project", "milestone")),
+    ("quiz", ("quiz",)),
+    ("lab", ("lab",)),
+    ("presentation", ("presentation",)),
+    ("assignment", ("assignment", "exercise", "round", "homework")),
+)
+
+
+def infer_category(title: str) -> str:
+    """Category of an imported deadline from words in its title; 'deadline' if none match."""
+    lowered = title.lower()
+    for category, words in CATEGORY_WORDS:
+        if any(word in lowered for word in words):
+            return category
+    return "deadline"
+
+
 def short_id(prefix: str, key: str) -> str:
     """Stable short id (e.g. 'D-3fa2c1') so the model and I can refer to items easily."""
     return f"{prefix}-{hashlib.sha1(key.encode()).hexdigest()[:6]}"
@@ -33,12 +52,15 @@ class Deadline:
     title: str
     due: datetime
     source: str
+    category: str = "deadline"  # assignment, project, exam, quiz, lab, presentation, ...
+    course_name: str = ""
 
     def to_dict(self) -> dict[str, object]:
         return {
             "id": self.id,
             "course": self.course,
             "title": self.title,
+            "category": self.category,
             "due": iso(self.due),
             "due_local": fmt_moment(self.due),
             "source": self.source,

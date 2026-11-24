@@ -12,7 +12,7 @@ import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, time
 from pathlib import Path
 
 from study_agent.timeutil import to_local
@@ -79,6 +79,29 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     approved INTEGER,
     latency_ms INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS courses (
+    code TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS course_deadlines (
+    id INTEGER PRIMARY KEY,
+    course TEXT NOT NULL REFERENCES courses(code) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    title TEXT NOT NULL,
+    due TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS course_sessions (
+    id INTEGER PRIMARY KEY,
+    course TEXT NOT NULL REFERENCES courses(code) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    weekday INTEGER NOT NULL,
+    start TEXT NOT NULL,
+    end TEXT NOT NULL,
+    first_day TEXT NOT NULL,
+    last_day TEXT NOT NULL
+);
 """
 
 
@@ -96,6 +119,10 @@ def task_ref(task_id: int) -> str:
 
 def block_ref(block_id: int) -> str:
     return f"B-{block_id}"
+
+
+def deadline_ref(deadline_id: int) -> str:
+    return f"M-{deadline_id}"
 
 
 def parse_ref(ref: str, prefix: str) -> int | None:
@@ -150,6 +177,37 @@ class Progress:
 class DeadlineState:
     done_at: datetime | None
     estimate_min: int | None
+
+
+@dataclass(frozen=True)
+class Course:
+    code: str
+    name: str
+
+
+@dataclass(frozen=True)
+class CourseDeadline:
+    id: int
+    course: str
+    kind: str
+    title: str
+    due: datetime
+
+    @property
+    def ref(self) -> str:
+        return deadline_ref(self.id)
+
+
+@dataclass(frozen=True)
+class Session:
+    id: int
+    course: str
+    kind: str
+    weekday: int  # 0 = Monday
+    start: time
+    end: time
+    first_day: date
+    last_day: date
 
 
 @dataclass(frozen=True)
@@ -417,3 +475,119 @@ class Store:
         if mode:
             query, params = query + " WHERE mode = ?", (mode,)
         return self.conn.execute(query + " ORDER BY started_at", params).fetchall()
+
+    # --- courses I enter myself -------------------------------------------------------------
+    # Deadlines I type in get ids "M-<n>". Their done-state and estimates live in deadline_state,
+    # exactly like calendar deadlines, so every other feature treats them the same way.
+
+    def add_course(self, code: str, name: str, now: datetime) -> None:
+        with self.transaction() as conn:
+            conn.execute(
+                "INSERT INTO courses (code, name, created_at) VALUES (?, ?, ?)",
+                (code, name, _utc(now)),
+            )
+
+    def rename_course(self, code: str, name: str) -> None:
+        with self.transaction() as conn:
+            conn.execute("UPDATE courses SET name = ? WHERE code = ?", (name, code))
+
+    def courses(self) -> list[Course]:
+        rows = self.conn.execute("SELECT code, name FROM courses ORDER BY code").fetchall()
+        return [Course(row["code"], row["name"]) for row in rows]
+
+    def course(self, code: str) -> Course | None:
+        row = self.conn.execute("SELECT code, name FROM courses WHERE code = ?", (code,)).fetchone()
+        return Course(row["code"], row["name"]) if row else None
+
+    def delete_course(self, code: str) -> None:
+        ids = [deadline_ref(d.id) for d in self.course_deadlines() if d.course == code]
+        with self.transaction() as conn:
+            self._forget_items(conn, ids)
+            conn.execute("DELETE FROM courses WHERE code = ?", (code,))
+
+    def _forget_items(self, conn: sqlite3.Connection, item_ids: list[str]) -> None:
+        for item_id in item_ids:
+            conn.execute("DELETE FROM deadline_state WHERE deadline_id = ?", (item_id,))
+            conn.execute("DELETE FROM blocks WHERE item_id = ?", (item_id,))
+
+    def add_course_deadline(
+        self, course: str, kind: str, title: str, due: datetime, now: datetime
+    ) -> int:
+        with self.transaction() as conn:
+            cursor = conn.execute(
+                "INSERT INTO course_deadlines (course, kind, title, due, created_at)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (course, kind, title, _utc(due), _utc(now)),
+            )
+        return int(cursor.lastrowid or 0)
+
+    def update_course_deadline(
+        self, deadline_id: int, kind: str, title: str, due: datetime
+    ) -> None:
+        with self.transaction() as conn:
+            conn.execute(
+                "UPDATE course_deadlines SET kind = ?, title = ?, due = ? WHERE id = ?",
+                (kind, title, _utc(due), deadline_id),
+            )
+
+    def delete_course_deadline(self, deadline_id: int) -> None:
+        with self.transaction() as conn:
+            self._forget_items(conn, [deadline_ref(deadline_id)])
+            conn.execute("DELETE FROM course_deadlines WHERE id = ?", (deadline_id,))
+
+    def course_deadlines(self) -> list[CourseDeadline]:
+        rows = self.conn.execute("SELECT * FROM course_deadlines ORDER BY due, id").fetchall()
+        result = []
+        for row in rows:
+            due = _local(row["due"])
+            assert due is not None
+            result.append(CourseDeadline(row["id"], row["course"], row["kind"], row["title"], due))
+        return result
+
+    def add_session(
+        self,
+        course: str,
+        kind: str,
+        weekday: int,
+        start: time,
+        end: time,
+        first_day: date,
+        last_day: date,
+    ) -> int:
+        with self.transaction() as conn:
+            cursor = conn.execute(
+                "INSERT INTO course_sessions (course, kind, weekday, start, end, first_day,"
+                " last_day) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    course,
+                    kind,
+                    weekday,
+                    start.strftime("%H:%M"),
+                    end.strftime("%H:%M"),
+                    first_day.isoformat(),
+                    last_day.isoformat(),
+                ),
+            )
+        return int(cursor.lastrowid or 0)
+
+    def delete_session(self, session_id: int) -> None:
+        with self.transaction() as conn:
+            conn.execute("DELETE FROM course_sessions WHERE id = ?", (session_id,))
+
+    def sessions(self) -> list[Session]:
+        rows = self.conn.execute(
+            "SELECT * FROM course_sessions ORDER BY course, weekday, start"
+        ).fetchall()
+        return [
+            Session(
+                row["id"],
+                row["course"],
+                row["kind"],
+                row["weekday"],
+                time.fromisoformat(row["start"]),
+                time.fromisoformat(row["end"]),
+                date.fromisoformat(row["first_day"]),
+                date.fromisoformat(row["last_day"]),
+            )
+            for row in rows
+        ]

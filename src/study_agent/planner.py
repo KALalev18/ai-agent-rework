@@ -56,6 +56,7 @@ class WorkItem:
     estimate_source: str  # "default" or "mine"
     logged_min: int
     source: str
+    category: str = "deadline"
 
     @property
     def remaining_min(self) -> int:
@@ -105,10 +106,13 @@ def build_items(
                 deadline.course,
                 deadline.title,
                 deadline.due,
-                mine if mine is not None else default_estimate(deadline.title),
+                mine
+                if mine is not None
+                else default_estimate(f"{deadline.category} {deadline.title}"),
                 "mine" if mine is not None else "default",
                 logged.get(deadline.id, 0),
                 deadline.source,
+                deadline.category,
             )
         )
     for task in tasks:
@@ -128,6 +132,7 @@ def build_items(
                 "mine" if task.estimate_min is not None else "default",
                 logged.get(task.ref, 0),
                 "my tasks",
+                "task",
             )
         )
     return items
