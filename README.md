@@ -1,27 +1,33 @@
 # Study Agent
 
-**A personal AI agent that reads my Aalto course deadlines and timetable every morning, plans my day around my lectures, and warns me what is at risk. It uses Claude with tool calling, links every deadline to its source, and changes nothing without my approval.**
+**A personal AI agent that knows my Aalto courses' deadlines, exams and classes, plans my study days around my lectures, and warns me what is at risk. It uses Claude with tool calling, links every deadline to its source, and changes nothing without my approval.**
 
 [![CI](https://github.com/KALalev18/ai-agent-rework/actions/workflows/ci.yml/badge.svg)](https://github.com/KALalev18/ai-agent-rework/actions/workflows/ci.yml)
 ![Python 3.12](https://img.shields.io/badge/python-3.12-blue) ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 
 ```bash
-uv run study web --demo   # web dashboard + chat on a fictional semester, no API key needed
-uv run study demo         # the same in the terminal
-uv run study today        # my real morning brief (needs an API key and my calendar URL)
+uv run study web          # the app at http://127.0.0.1:8765 (Courses, Calendar, Planner, Assistant, ...)
+uv run study web --demo   # the same on a fictional semester, no API key needed
+uv run study today        # my morning brief in the terminal
 ```
 
-![The Today page: greeting, stat cards, today's plan with lectures and suggested study blocks, and the deadlines that need attention with Log / Estimate / Done actions](docs/web.png)
+## What it looks like with my real courses
 
-![The Planner: a week grid with lectures, draggable saved study blocks, dashed suggestions you click to save, and deadline flags](docs/planner.png)
+These are screenshots of the live app with my **8 courses of autumn 2026** at Aalto, taken on Tue 24 Nov 2026 (not the demo).
 
-![The Calendar: a month view with each course in its own colour, exams in red, deadlines, weekly classes and study blocks](docs/calendar.png)
+![Today: this week has three deadlines on Friday; the risk check flags the CS-E4400 project as at risk (22 h of work left up to Friday night, 20 h of free study time) and an overdue CS-E3190 challenge exercise, and today's plan puts one block per project around the Tuesday lecture](docs/today.png)
 
-![Courses: each course with its assignments, projects and exams, their risk status, and its weekly classes](docs/courses.png)
+The risk check is the point of the project. On Tuesday it showed that Friday 27 Nov needs **22 hours** of work across three deadlines (Computer Vision round 12, the Scalable Systems project and the Design of WWW Services project), while my lectures, saved blocks and a 5 h/day limit leave **20 hours** of study time. The CS-E4400 project is the one that does not fit, three days before it is due.
 
-![A real run of `study demo`: morning brief, an approval prompt, and the grounding checker catching an invented exam date](docs/demo.svg)
+![Planner: the week of 23 Nov with lectures, my saved study blocks for Computer Vision round 12, one suggested block per project per day, and the three Friday deadline flags](docs/planner.png)
 
-<sub>The screenshot is a real `study demo` run, regenerated with `uv run python scripts/demo_screenshot.py`. Demo model turns are scripted; the tools, approval gate, checker and database are real.</sub>
+![Calendar, November 2026: each course in its own colour, finished exercise rounds and modules struck through, weekly lectures, study blocks and the Friday deadlines](docs/calendar.png)
+
+![Courses: each course with its assignments, projects and exams, what is done, what is at risk, and the next deadline](docs/courses.png)
+
+![A run of `study demo`: morning brief, an approval prompt, and the grounding checker catching an invented exam date](docs/demo.svg)
+
+<sub>The last screenshot is `study demo` on a fictional semester (regenerate with `uv run python scripts/demo_screenshot.py`): its model turns are scripted, while the tools, approval gate, checker and database are real.</sub>
 
 ---
 
@@ -84,7 +90,7 @@ Plus a Ctrl+K command palette (jump to a page or ask the assistant), Alt+1…8 s
 - **Approval in the browser.** When a write tool returns a proposal, the agent thread blocks until I click Approve or Decline. No answer within 10 minutes means declined. Nothing is written while it waits; a test checks this over HTTP.
 - **Local-only by design.** It binds to `127.0.0.1`, accepts only localhost `Host` headers (blocks DNS rebinding), and every POST needs an `X-Study-Agent` header. Browsers can't add that header to a cross-site request without a CORS preflight, which the app never allows, so another website can't start runs (spending my API budget) or approve changes through my browser. Calendar titles and answers are inserted as text or HTML-escaped, never as raw HTML.
 
-The screenshots above are real `study web --demo` pages captured in headless Edge. In demo mode, button changes are saved for the session (so the numbers and risks update for real), while assistant answers are scripted replays, so its approval cards show the scripted decision instead of buttons.
+The screenshots at the top are the live app with my own courses. `study web --demo` shows the same pages on a fictional semester: button changes are saved for the session (so the numbers and risks update for real), while assistant answers are scripted replays, so its approval cards show the scripted decision instead of buttons.
 
 ## Two ways to get your data in
 
@@ -205,16 +211,23 @@ Every number here comes from a command in this table. Numbers I have not measure
 
 | What | Result | Command |
 |---|---|---|
-| Tests | **159 passed**, 90% branch coverage | `uv run pytest --cov` |
+| Tests | **160 passed**, 90% branch coverage | `uv run pytest --cov` |
 | Eval, replay mode | **23/23** cases; 0 ungrounded claims after the check; the checker caught the 2 planted claims in `hallucination-trap` | `uv run study eval` |
 | Eval, live mode | *pending* | `uv run study eval --live --record` |
 | `study today` latency p50 / p95 | *pending, needs daily use* | `uv run study stats` |
 | Cost per day of real use | *pending* | `uv run study stats` |
-| Days used | *pending* | `uv run study stats` |
+| Days used | *pending* (started 24 Nov 2026) | `uv run study stats` |
+| Courses tracked | **8** (autumn 2026), 28 deadlines | Courses page |
 
-## How I use it every day
+## How I use it
 
-*To be written from my own run log after a week of use: days used, average cost, and one deadline it caught.*
+I started using it on **24 Nov 2026**, with all 8 of my autumn 2026 courses entered on the Courses page from their MyCourses and A+ pages: 28 deadlines (exercise rounds, modules, homework sets, two projects and two exams) and the weekly lectures I attend. Past rounds I had already submitted are marked done, so they show as history, not as risk.
+
+Each morning I open Today: the plan for the day, what needs attention, and what is coming up. When I finish something I log the time against it, which lowers the remaining effort the risk check uses.
+
+The first real result is the warning above: three deadlines on the same Friday that do not fit in the study time I have, flagged on Tuesday.
+
+*Days used, cost per day and latency will be added here from `study stats` once I have a week of use with the API.*
 
 ## Run it
 
@@ -262,7 +275,7 @@ src/study_agent/
   courses.py      courses I type in -> the same Deadline/Event objects as imports
   web/            FastAPI backend + static HTML/CSS/JS dashboard and chat
   cli.py, render.py, stats.py, runlog.py
-tests/            159 tests: parsing, DST, planner, approval gate, checker, loop, live request shape, web
+tests/            160 tests: parsing, DST, planner, approval gate, checker, loop, live request shape, web
 ```
 
 ## What I'd do next
