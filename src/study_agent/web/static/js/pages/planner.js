@@ -67,9 +67,17 @@ export async function render(view) {
       block.addEventListener("dragend", () => block.classList.remove("dragging"));
       col.append(block);
     }
-    for (const d of data.deadlines.filter((x) => isoDate(x.due) === day.date)) {
-      // Centre the flag on the due time, but keep it inside the grid (23:59 is below 22:00).
-      const y = Math.min(Math.max(0, toY(minutesOf(d.due)) - 9), columnHeight - 18);
+    // Deadline flags sit at their due time, clamped inside the grid (23:59 is below 22:00).
+    // Flags that would overlap (two things due at once) are stacked upwards, never hidden.
+    const flags = data.deadlines
+      .filter((x) => isoDate(x.due) === day.date)
+      .sort((a, b) => a.due.localeCompare(b.due))
+      .map((d) => ({ d, y: Math.max(0, toY(minutesOf(d.due)) - 9) }));
+    for (let i = flags.length - 1; i >= 0; i--) {
+      const limit = i === flags.length - 1 ? columnHeight - 18 : flags[i + 1].y - 20;
+      flags[i].y = Math.max(0, Math.min(flags[i].y, limit));
+    }
+    for (const { d, y } of flags) {
       col.append(el("button", { class: `deadline-flag ${d.risk}`, style: `top:${y}px`, title: `${d.course} ${d.title} due ${d.due_local}`, onclick: () => openItem(d.id) },
         icon("flag", 12), `${d.course} due ${hm(d.due)}`));
     }
