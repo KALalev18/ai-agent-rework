@@ -15,6 +15,10 @@ uv run study today        # my real morning brief (needs an API key and my calen
 
 ![The Planner: a week grid with lectures, draggable saved study blocks, dashed suggestions you click to save, and deadline flags](docs/planner.png)
 
+![The Calendar: a month view with each course in its own colour, exams in red, deadlines, weekly classes and study blocks](docs/calendar.png)
+
+![Courses: each course with its assignments, projects and exams, their risk status, and its weekly classes](docs/courses.png)
+
 ![A real run of `study demo`: morning brief, an approval prompt, and the grounding checker catching an invented exam date](docs/demo.svg)
 
 <sub>The screenshot is a real `study demo` run, regenerated with `uv run python scripts/demo_screenshot.py`. Demo model turns are scripted; the tools, approval gate, checker and database are real.</sub>
@@ -25,7 +29,7 @@ uv run study today        # my real morning brief (needs an API key and my calen
 
 | Command | What happens |
 |---|---|
-| `study web` | Local web app at `http://127.0.0.1:8765`: Today, Planner (drag-and-drop week), Deadlines, Tasks, Progress, Assistant, Insights (with a live eval runner) and Settings |
+| `study web` | Local web app at `http://127.0.0.1:8765`: Today, Calendar (month view), Planner (drag-and-drop week), Deadlines, Tasks, Progress, Courses (type in your semester), Assistant, Insights (with a live eval runner) and Settings |
 | `study today` | Morning brief: today's lectures, suggested study blocks in free time, everything overdue / at risk / tight, deadlines in the next 7 days |
 | `study week` | The next 7 days, one line per day, plus risks |
 | `study ask "..."` | Any question: *"What's due this week?"*, *"Why is the project at risk?"*, *"Move my Saturday block to Sunday 13:00"* |
@@ -34,7 +38,7 @@ uv run study today        # my real morning brief (needs an API key and my calen
 | `study chat` | Multi-turn conversation |
 | `study deadlines` | Deadline and risk table with **no model call**: the same deterministic data the agent sees |
 | `study stats` | Days used, cost per day, latency p50/p95, grounding corrections, all from the run log |
-| `study eval [--live]` | The 22-question evaluation set |
+| `study eval [--live]` | The 23-question evaluation set |
 
 ## Architecture
 
@@ -42,14 +46,15 @@ uv run study today        # my real morning brief (needs an API key and my calen
 flowchart LR
     CLI["CLI<br/>study today / ask / done"] --> Loop["Agent loop<br/>(plain Python, max 8 rounds)"]
     Web["Web app (FastAPI)<br/>8 pages + Approve/Decline"] --> Loop`n    Web -->|"buttons: preview, then apply"| Write
-    Loop <-->|"messages + 13 tool schemas<br/>(prompt-cached)"| Claude["Claude API<br/>claude-opus-5-5"]
+    Loop <-->|"messages + 14 tool schemas<br/>(prompt-cached)"| Claude["Claude API<br/>claude-opus-5-5"]
     Loop --> Tools["Tools"]
     Tools --> Read["Read-only (run freely)<br/>get_deadlines, get_timetable,<br/>plan_day, plan_week,<br/>list_tasks, get_progress"]
-    Tools --> Write["Write (return a proposal)<br/>add_task, log_progress, complete_item,<br/>set_estimate, schedule_blocks,<br/>move_study_block, delete_study_block"]
+    Tools --> Write["Write (return a proposal)<br/>add_task, add_deadline, log_progress, complete_item,<br/>set_estimate, schedule_blocks,<br/>move_study_block, delete_study_block"]
     Write --> Gate{"Approve? y/N"}
     Gate -->|y| DB[("SQLite<br/>tasks, progress, blocks,<br/>run log")]
     Read --> Planner["Planner<br/>EDF risk check, block filler"]
     Planner --> ICS[".ics / YAML<br/>MyCourses + timetable"]
+    Planner --> Mine["Courses I type in<br/>deadlines, exams, weekly classes"]
     Read --> DB
     Loop --> Checker["Grounding checker<br/>dates, times, course codes"]
     Checker -->|"ungrounded: 1 correction round"| Loop
@@ -61,13 +66,15 @@ flowchart LR
 
 | Page | What you can do |
 |---|---|
+| **Calendar** | Month grid of everything: exams (red), deadlines in each course's colour, weekly classes and study blocks. Filter by layer or course, click a day to see it all or add a deadline on that day |
+| **Courses** | Type in your semester: each course, its assignments, projects, exams, quizzes and presentations (date, time, effort), and its weekly classes. Edit, delete, rename |
 | **Today** | Greeting and summary, 4 stat cards, today's plan with *Save* / *Remove* per block and *Save all*, everything that needs attention with *Log*, *Estimate*, *Done* |
 | **Planner** | Week grid with lectures, saved blocks and suggestions. **Drag a block to move it** (snaps to 15 min), click a suggestion to save it, click a deadline flag to open it, browse weeks |
 | **Deadlines / Tasks** | Search, course and date filters, status chips, finished items; a detail drawer with risk reasoning, progress, blocks and history; quick-add for tasks |
 | **Progress** | Log work against any item, time per day and per course, history by day |
 | **Assistant** | The agent with a live tool trace, Approve / Decline cards and a grounding badge on every answer |
-| **Insights** | Days used, cost per day, latency p50/p95, cache hit rate, recent runs; **Run evaluation** runs the 22 cases in about a second |
-| **Settings** | Calendars (URLs hidden), planning limits, model, the 13 tools and which need approval, sync, theme |
+| **Insights** | Days used, cost per day, latency p50/p95, cache hit rate, recent runs; **Run evaluation** runs the 23 cases in about a second |
+| **Settings** | Calendars (URLs hidden), planning limits, model, the 14 tools and which need approval, sync, theme |
 
 Plus a Ctrl+K command palette (jump to a page or ask the assistant), Alt+1…8 shortcuts, light and dark themes, toasts and a mobile layout.
 
@@ -79,6 +86,13 @@ Plus a Ctrl+K command palette (jump to a page or ask the assistant), Alt+1…8 s
 
 The screenshots above are real `study web --demo` pages captured in headless Edge. In demo mode, button changes are saved for the session (so the numbers and risks update for real), while assistant answers are scripted replays, so its approval cards show the scripted decision instead of buttons.
 
+## Two ways to get your data in
+
+- **Type it in** on the Courses page: course, deadlines with a type (assignment, project, exam, quiz, lab, presentation), due time and effort, and weekly classes with their first and last week.
+- **Import** a MyCourses `.ics` export and a timetable (`.ics` or YAML).
+
+[`courses.py`](src/study_agent/courses.py) converts typed-in courses into the same `Deadline` and `Event` objects the `.ics` parser produces, so nothing downstream knows the difference: the risk check, planner, tools, agent and grounding checker work unchanged, and both sources can be mixed. Typed-in deadlines get ids like `M-3`; their done-state, estimates and logged time use the same tables as imported ones. Weekly classes are expanded per date in Helsinki time, so a Monday 10:15 lecture stays at 10:15 across the DST change.
+
 ## Why I built it
 
 At Aalto my deadlines are spread across MyCourses, course pages and my own notes, and I kept losing track of what was due when. A calendar shows *when* things are due, not whether I can still make it. This agent answers the question I actually have in the morning: *given my lectures and everything due, what should I work on today, and what am I about to miss?*
@@ -87,7 +101,7 @@ At Aalto my deadlines are spread across MyCourses, course pages and my own notes
 
 [`agent.py`](src/study_agent/agent.py) is a plain `for` loop, about 100 lines, with no agent framework:
 
-1. Send the question, the 13 tool schemas and the conversation to Claude.
+1. Send the question, the 14 tool schemas and the conversation to Claude.
 2. If Claude answers with `tool_use` blocks, my code runs each tool and sends **all** results back in one message. Errors go back as `is_error` results, so the model can correct a bad argument (e.g. a block that overlaps a lecture).
 3. Repeat until Claude gives a final answer, with a **hard limit of 8 model calls** per question, so a confused model cannot loop and spend money.
 4. Run the grounding checker on the answer (below). If it finds an unsupported claim, send one correction message and loop once more.
@@ -134,7 +148,7 @@ It is deterministic (no second model call), so it costs nothing and cannot itsel
 
 ## How I evaluate it
 
-[`evals/cases.yaml`](src/study_agent/evals/cases.yaml) has **22 questions** against a fictional semester (made-up course codes, clock frozen at Mon 23 Nov 2026 08:00). Each case checks:
+[`evals/cases.yaml`](src/study_agent/evals/cases.yaml) has **23 questions** against a fictional semester (made-up course codes, clock frozen at Mon 23 Nov 2026 08:00). Each case checks:
 
 - **tool calls**: expected tools called, forbidden ones not (no write tools for a read question, no move when *"move my block to Friday"* is ambiguous);
 - **facts**: expected facts present, forbidden ones absent (e.g. a finished assignment, a non-existent exam date);
@@ -185,8 +199,8 @@ Every number here comes from a command in this table. Numbers I have not measure
 
 | What | Result | Command |
 |---|---|---|
-| Tests | **142 passed**, 89% branch coverage | `uv run pytest --cov` |
-| Eval, replay mode | **22/22** cases; 0 ungrounded claims after the check; the checker caught the 2 planted claims in `hallucination-trap` | `uv run study eval` |
+| Tests | **154 passed**, 90% branch coverage | `uv run pytest --cov` |
+| Eval, replay mode | **23/23** cases; 0 ungrounded claims after the check; the checker caught the 2 planted claims in `hallucination-trap` | `uv run study eval` |
 | Eval, live mode | *pending* | `uv run study eval --live --record` |
 | `study today` latency p50 / p95 | *pending, needs daily use* | `uv run study stats` |
 | Cost per day of real use | *pending* | `uv run study stats` |
@@ -208,7 +222,15 @@ uv run study demo
 uv run study eval
 ```
 
-**On your own calendar:**
+**With your own courses (no calendar export needed):**
+
+1. `uv run study web` and open **Courses**: add each course, then its assignments, projects and exams (date, time, roughly how many hours), then its weekly lectures and exercise sessions.
+2. Everything else uses that data at once: Today, the Calendar, the Planner and the risk check.
+3. For the assistant, put `ANTHROPIC_API_KEY` in `.env` (copy `.env.example`). It can also add deadlines for you: *"add my CS-E4780 exam on 14 Dec at 9"*, after your approval.
+
+Your data lives in a local SQLite file (`~/.study-agent/study.db`), never in the repository.
+
+**Or import your MyCourses calendar** (both can be used together):
 
 1. `cp .env.example .env`, then set `ANTHROPIC_API_KEY`.
 2. In MyCourses, open *Calendar → Export calendar*, export all course events for *Recent and next 60 days*, click *Get calendar URL*, and paste it into `STUDY_DEADLINES_ICS`.
@@ -224,16 +246,17 @@ On Windows machines where an Application Control policy blocks the generated `st
 ```
 src/study_agent/
   agent.py        the loop, system prompt, correction round
-  tools.py        13 tool schemas + handlers; write tools return proposals
+  tools.py        14 tool schemas + handlers; write tools return proposals
   planner.py      EDF risk check, free-slot finder, block suggestions
   grounding.py    the grounding checker
   llm.py          live Claude client (caching, fallback, errors) and replay client
   sources/        .ics + YAML parsing, download cache
   store.py        SQLite: tasks, progress, blocks, run log
-  evals/          22 cases + runner;  demo/  fictional semester
+  evals/          23 cases + runner;  demo/  fictional semester
+  courses.py      courses I type in -> the same Deadline/Event objects as imports
   web/            FastAPI backend + static HTML/CSS/JS dashboard and chat
   cli.py, render.py, stats.py, runlog.py
-tests/            142 tests: parsing, DST, planner, approval gate, checker, loop, live request shape, web
+tests/            154 tests: parsing, DST, planner, approval gate, checker, loop, live request shape, web
 ```
 
 ## What I'd do next
